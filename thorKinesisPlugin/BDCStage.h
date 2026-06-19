@@ -1,0 +1,96 @@
+#pragma once
+
+#include <string>
+#include <cstdint>
+
+struct BDCTriggerConfig
+{
+    bool enabled = false;
+
+    int trigger1Mode = 0;
+    int trigger1Polarity = 1;
+    int trigger2Mode = 0;
+    int trigger2Polarity = 1;
+
+    int32_t startPosFwd = 0;
+    int32_t intervalFwd = 0;
+    int32_t pulseCountFwd = 1;
+
+    int32_t startPosRev = 0;
+    int32_t intervalRev = 0;
+    int32_t pulseCountRev = 1;
+
+    int32_t cycleCount = 2147483647;
+    int32_t pulseWidthUs = 50000;
+};
+
+class BDCStage
+{
+public:
+    explicit BDCStage(const std::string& baseSerial);
+    ~BDCStage();
+
+    bool open(const std::string& baseSerial, bool home, short* errOut = nullptr);
+    void close();
+
+    // Motion - low level device units
+    bool homeAll(short* errOut = nullptr);
+    bool home(unsigned channel, short* errOut = nullptr);
+    bool homeAllIfNeeded(short* errOut = nullptr);
+    bool homeIfNeeded(unsigned channel, short* errOut = nullptr);
+
+    bool moveTo(int32_t pos, unsigned channel, short* errOut = nullptr);
+    bool moveRel(int32_t delta, unsigned channel, short* errOut = nullptr);
+    bool stopImmediate(unsigned channel, short* errOut = nullptr);
+
+    int32_t getPosition(unsigned channel) const;
+
+    // Motion - public standard unit: micrometers (µm)
+    bool moveToUm(double posUm, unsigned channel, short* errOut = nullptr);
+    bool moveRelUm(double deltaUm, unsigned channel, short* errOut = nullptr);
+    double getPositionUm(unsigned channel, short* errOut = nullptr) const;
+
+    // Unit conversion helpers
+    double umPerDeviceUnit(unsigned channel) const;
+    double mmPerDeviceUnit(unsigned channel) const;
+
+    double deviceToUm(int32_t deviceUnits, unsigned channel) const;
+    double deviceToMm(int32_t deviceUnits, unsigned channel) const;
+    int32_t umToDevice(double um, unsigned channel, short* errOut = nullptr) const;
+    int32_t mmToDevice(double mm, unsigned channel, short* errOut = nullptr) const;
+
+    // Trigger API
+    void setTriggerConfig(const BDCTriggerConfig& cfg);
+    const BDCTriggerConfig& triggerConfig() const;
+
+    bool applyTriggerConfig(unsigned channel, short* errOut = nullptr);
+    bool disableTrigger(unsigned channel, short* errOut = nullptr);
+
+    const std::string& serial() const { return m_serial; }
+    bool isOpen() const { return m_isOpen; }
+
+private:
+    static void logErr(const char* fn, const std::string& serial, short err, unsigned ch = 0);
+    static bool okOrLog(const char* fn, const std::string& serial, short err, unsigned ch = 0, short* errOut = nullptr);
+
+    bool startPollingAll(short* errOut = nullptr);
+    bool enableIfNeeded(unsigned channel, short* errOut = nullptr);
+    bool enableAll(short* errOut = nullptr);
+
+    bool waitUntilIdle(unsigned channel, int timeoutMs, short* errOut = nullptr);
+    bool waitUntilHomed(unsigned channel, int timeoutMs, short* errOut = nullptr);
+
+private:
+    std::string m_serial;
+    const char* m_serialCStr = nullptr;
+    bool m_isOpen = false;
+    BDCTriggerConfig m_trig;
+
+    // Internal scaling: real units assumed mm for linear stages
+    double factor_position_mm[2] = { 1.0, 1.0 };       // mm / device unit
+    double factor_velocity_mm[2] = { 1.0, 1.0 };       // mm/s / device unit
+    double factor_acceleration_mm[2] = { 1.0, 1.0 };   // mm/s^2 / device unit
+
+    // Public standard unit
+    double factor_um[2] = { 1000.0, 1000.0 };          // µm / device unit
+};

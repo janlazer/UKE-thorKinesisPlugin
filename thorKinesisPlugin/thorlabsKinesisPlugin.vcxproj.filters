@@ -35,45 +35,44 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="thorlabstdc001plugin.cpp">
+    <ClCompile Include="thorlabsKinesisPlugin.cpp">
       <Filter>Source Dateien</Filter>
     </ClCompile>
-    <ClCompile Include="GeneratedFiles\Debug\moc_interfaces.cpp">
-      <Filter>Generierte Dateien\Debug</Filter>
+    <ClCompile Include="BDCStage.cpp">
+      <Filter>Source Dateien</Filter>
     </ClCompile>
-    <ClCompile Include="GeneratedFiles\Release\moc_interfaces.cpp">
-      <Filter>Generierte Dateien\Release</Filter>
+    <ClCompile Include="KVSStage.cpp">
+      <Filter>Source Dateien</Filter>
     </ClCompile>
-    <ClCompile Include="GeneratedFiles\Debug\moc_thorlabstdc001plugin.cpp">
-      <Filter>Generierte Dateien\Debug</Filter>
-    </ClCompile>
-    <ClCompile Include="GeneratedFiles\Release\moc_thorlabstdc001plugin.cpp">
-      <Filter>Generierte Dateien\Release</Filter>
+    <ClCompile Include="KinesisDetect.cpp">
+      <Filter>Source Dateien</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="thorlabstdc001plugin_global.h">
+    <ClInclude Include="thorlabsKinesisPlugin_global.h">
       <Filter>Header Dateien</Filter>
     </ClInclude>
-    <ClInclude Include="GeneratedFiles\ui_thorlabsTDC001_UI.h">
-      <Filter>Generierte Dateien</Filter>
+    <ClInclude Include="BDCStage.h">
+      <Filter>Header Dateien</Filter>
     </ClInclude>
-    <ClInclude Include="GeneratedFiles\ui_thorlabsLogger_UI.h">
-      <Filter>Generierte Dateien</Filter>
+    <ClInclude Include="KVSStage.h">
+      <Filter>Header Dateien</Filter>
+    </ClInclude>
+    <ClInclude Include="KinesisDetect.h">
+      <Filter>Header Dateien</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="interfaces.h">
+    <QtMoc Include="interfaces.h">
       <Filter>Header Dateien</Filter>
-    </CustomBuild>
-    <CustomBuild Include="thorlabstdc001plugin.h">
+    </QtMoc>
+    <QtMoc Include="thorlabsKinesisPlugin.h">
       <Filter>Header Dateien</Filter>
-    </CustomBuild>
-    <CustomBuild Include="thorlabsTDC001_UI.ui">
+    </QtMoc>
+  </ItemGroup>
+  <ItemGroup>
+    <QtUic Include="thorlabsKinesisPlugin_UI.ui">
       <Filter>Form Dateien</Filter>
-    </CustomBuild>
-    <CustomBuild Include="thorlabsLogger_UI.ui">
-      <Filter>Form Dateien</Filter>
-    </CustomBuild>
+    </QtUic>
   </ItemGroup>
 </Project>

@@ -1,0 +1,273 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ui version="4.0">
+    <class>DockWidget</class>
+    <widget class="QDockWidget" name="DockWidget">
+        <property name="windowTitle">
+            <string>Thorlabs Kinesis Plugin</string>
+        </property>
+        <widget class="QWidget" name="dockWidgetContents">
+            <layout class="QVBoxLayout" name="verticalLayout">
+                <item>
+                    <layout class="QHBoxLayout" name="topBarLayout">
+                        <item>
+                            <widget class="QPushButton" name="pushButton_refresh">
+                                <property name="text">
+                                    <string>Refresh</string>
+                                </property>
+                            </widget>
+                        </item>
+                        <item>
+                            <widget class="QPushButton" name="pushButton_logger">
+                                <property name="text">
+                                    <string>Open Logger</string>
+                                </property>
+                            </widget>
+                        </item>
+                        <item>
+                            <spacer name="horizontalSpacerTop">
+                                <property name="orientation">
+                                    <enum>Qt::Horizontal</enum>
+                                </property>
+                                <property name="sizeHint" stdset="0">
+                                    <size>
+                                        <width>40</width>
+                                        <height>20</height>
+                                    </size>
+                                </property>
+                            </spacer>
+                        </item>
+                    </layout>
+                </item>
+
+                <item>
+                    <widget class="QGroupBox" name="groupBox_device">
+                        <property name="title">
+                            <string>Device</string>
+                        </property>
+                        <layout class="QGridLayout" name="gridLayout_device">
+                            <item row="0" column="0">
+                                <widget class="QLabel" name="label_devices">
+                                    <property name="text">
+                                        <string>Axis:</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="0" column="1">
+                                <widget class="QComboBox" name="comboBox_devices" />
+                            </item>
+                            <item row="1" column="0">
+                                <widget class="QLabel" name="label_serial">
+                                    <property name="text">
+                                        <string>Serial:</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="1" column="1">
+                                <widget class="QLineEdit" name="lineEdit_serial">
+                                    <property name="readOnly">
+                                        <bool>true</bool>
+                                    </property>
+                                </widget>
+                            </item>
+                        </layout>
+                    </widget>
+                </item>
+
+                <item>
+                    <widget class="QGroupBox" name="groupBox_motion">
+                        <property name="title">
+                            <string>Motion</string>
+                        </property>
+                        <layout class="QGridLayout" name="gridLayout_motion">
+                            <item row="0" column="0">
+                                <widget class="QPushButton" name="pushButton_home">
+                                    <property name="text">
+                                        <string>Home</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="0" column="1">
+                                <widget class="QPushButton" name="pushButton_stop">
+                                    <property name="text">
+                                        <string>Stop</string>
+                                    </property>
+                                </widget>
+                            </item>
+
+                            <item row="1" column="0">
+                                <widget class="QLabel" name="label_pos">
+                                    <property name="text">
+                                        <string>Position [µm]:</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="1" column="1">
+                                <widget class="QLineEdit" name="lineEdit_position">
+                                    <property name="text">
+                                        <string>0</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="1" column="2">
+                                <widget class="QPushButton" name="pushButton_position">
+                                    <property name="text">
+                                        <string>Go</string>
+                                    </property>
+                                </widget>
+                            </item>
+
+                            <item row="2" column="0">
+                                <widget class="QLabel" name="label_step">
+                                    <property name="text">
+                                        <string>Step [µm]:</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="2" column="1">
+                                <widget class="QLineEdit" name="lineEdit_step">
+                                    <property name="text">
+                                        <string>100</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="2" column="2">
+                                <layout class="QHBoxLayout" name="stepButtonsLayout">
+                                    <item>
+                                        <widget class="QPushButton" name="pushButton_stepDown">
+                                            <property name="text">
+                                                <string>Step-</string>
+                                            </property>
+                                        </widget>
+                                    </item>
+                                    <item>
+                                        <widget class="QPushButton" name="pushButton_stepUp">
+                                            <property name="text">
+                                                <string>Step+</string>
+                                            </property>
+                                        </widget>
+                                    </item>
+                                </layout>
+                            </item>
+
+                            <item row="3" column="0">
+                                <widget class="QPushButton" name="pushButton_getPosition">
+                                    <property name="text">
+                                        <string>Get Position</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="3" column="1">
+                                <widget class="QLabel" name="label_positionValue">
+                                    <property name="text">
+                                        <string>0.000 µm</string>
+                                    </property>
+                                </widget>
+                            </item>
+                        </layout>
+                    </widget>
+                </item>
+
+                <item>
+                    <widget class="QGroupBox" name="groupBox_trigger">
+                        <property name="title">
+                            <string>Trigger (hardware output)</string>
+                        </property>
+                        <layout class="QGridLayout" name="gridLayout_trigger">
+                            <item row="0" column="0">
+                                <widget class="QLabel" name="label_trigStart">
+                                    <property name="text">
+                                        <string>Start [µm]:</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="0" column="1">
+                                <widget class="QLineEdit" name="lineEdit_trigStart">
+                                    <property name="text">
+                                        <string>0</string>
+                                    </property>
+                                </widget>
+                            </item>
+
+                            <item row="1" column="0">
+                                <widget class="QLabel" name="label_trigInterval">
+                                    <property name="text">
+                                        <string>Interval [µm]:</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="1" column="1">
+                                <widget class="QLineEdit" name="lineEdit_trigInterval">
+                                    <property name="text">
+                                        <string>0</string>
+                                    </property>
+                                </widget>
+                            </item>
+
+                            <item row="2" column="0">
+                                <widget class="QLabel" name="label_trigCount">
+                                    <property name="text">
+                                        <string>Pulse Count:</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="2" column="1">
+                                <widget class="QLineEdit" name="lineEdit_trigCount">
+                                    <property name="text">
+                                        <string>1</string>
+                                    </property>
+                                </widget>
+                            </item>
+
+                            <item row="3" column="0">
+                                <widget class="QLabel" name="label_trigWidth">
+                                    <property name="text">
+                                        <string>Pulse Width [µs]:</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="3" column="1">
+                                <widget class="QLineEdit" name="lineEdit_trigWidth">
+                                    <property name="text">
+                                        <string>50000</string>
+                                    </property>
+                                </widget>
+                            </item>
+
+                            <item row="4" column="0">
+                                <widget class="QPushButton" name="pushButton_applyTrigger">
+                                    <property name="text">
+                                        <string>Apply Trigger</string>
+                                    </property>
+                                </widget>
+                            </item>
+                            <item row="4" column="1">
+                                <widget class="QPushButton" name="pushButton_disableTrigger">
+                                    <property name="text">
+                                        <string>Disable Trigger</string>
+                                    </property>
+                                </widget>
+                            </item>
+                        </layout>
+                    </widget>
+                </item>
+
+                <item>
+                    <spacer name="verticalSpacerBottom">
+                        <property name="orientation">
+                            <enum>Qt::Vertical</enum>
+                        </property>
+                        <property name="sizeHint" stdset="0">
+                            <size>
+                                <width>20</width>
+                                <height>40</height>
+                            </size>
+                        </property>
+                    </spacer>
+                </item>
+
+            </layout>
+        </widget>
+    </widget>
+    <resources />
+    <connections />
+</ui>

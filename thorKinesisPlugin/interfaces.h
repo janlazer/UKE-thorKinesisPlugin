@@ -3,7 +3,7 @@
 **									smartLab										**
 **	Copyright 2012 - Laser Zentrum Hannover e.V.  - Biomedical Optics Departement	**
 **																					**
-**	@author Sebastian Bleeker (BR), Ben Matthias (MB)								**
+**	@author Sebastian Bleeker (BR), Ben Matthias (MB), Jan Hahn (JH)				**
 **																					**
 **	Class: interfaces.h																**
 **																					**
@@ -18,18 +18,22 @@
 *************************************************************************************/
 
 //!	Interfaces
-/*!	This file contains all interfaces which are used in this software. The base	
-	Class of Hardware Plugins is the IHardware Interface, which will be derived by  
-	by a hardware specific interface, which is derived by the plugins main class.   
-																					
-    The interfaces for the Output Classes are also located in this file. The Main   
-    Interface is the IOutout interface, from which all output classes have to derive
-    from.	
+/*!	This file contains all interfaces which are used in this software. The base
+	Class of Hardware Plugins is the IHardware Interface, which will be derived by
+	by a hardware specific interface, which is derived by the plugins main class.
+
+	The interfaces for the Output Classes are also located in this file. The Main
+	Interface is the IOutout interface, from which all output classes have to derive
+	from.
 */
 #pragma once
 
 #ifndef INTERFACES_H
 #define INTERFACES_H
+
+#ifdef min
+#undef min
+#endif
 
 #include <QTextEdit>
 #include <QDialog>
@@ -63,11 +67,11 @@ public:
 
 	virtual void updateView() = 0;
 
-	void setMdiSubWindow(QMdiSubWindow *wnd) { this->pWnd = wnd; }
-	QMdiSubWindow* getMdiSubWindow(){ return this->pWnd; }
+	void setMdiSubWindow(QMdiSubWindow* wnd) { this->pWnd = wnd; }
+	QMdiSubWindow* getMdiSubWindow() { return this->pWnd; }
 
 protected:
-	QMdiSubWindow *pWnd;
+	QMdiSubWindow* pWnd;
 };
 
 
@@ -91,7 +95,7 @@ public:
 	* @param name - uniqie identifier for the curve
 	**/
 
-	MuSoCurve(QString name){this->name = name; curve = new QwtPlotCurve(name);}
+	MuSoCurve(QString name) { this->name = name; curve = new QwtPlotCurve(name); }
 
 	/**
 	* Returns the QwtPlotCurve
@@ -99,7 +103,7 @@ public:
 	* @returns a pointer to the QwtPlotCurve
 	**/
 
-	QwtPlotCurve* getCurve(){ return this->curve;}
+	QwtPlotCurve* getCurve() { return this->curve; }
 
 	/**
 	* Returns the name/identifier
@@ -107,7 +111,7 @@ public:
 	* @returns the name
 	**/
 
-	QString getName(){return this->name;}
+	QString getName() { return this->name; }
 
 	/**
 	* Sets the name/identifier
@@ -115,7 +119,7 @@ public:
 	* @param name - sets the name of the curve
 	**/
 
-	void setName(QString name){ this->name = name; this->curve->setTitle(name); }
+	void setName(QString name) { this->name = name; this->curve->setTitle(name); }
 
 private:
 	QwtPlotCurve* curve; /*!< actual curve */
@@ -133,13 +137,13 @@ public:
 
 	/**
 	* Sets the data and scale for the first curve.
-	* 
+	*
 	* @param data the data
 	* @param scale the scale
 	*/
 
-	virtual void setData(QString identifier, QVector<double> * data,QVector<double> * scale) = 0;
-	virtual void setData(QString identifer, const double *data, const double* scale, int size ) = 0;
+	virtual void setData(QString identifier, QVector<double>* data, QVector<double>* scale) = 0;
+	virtual void setData(QString identifer, const double* data, const double* scale, int size) = 0;
 
 	/**
 	* adds a curve to the plotter
@@ -148,7 +152,7 @@ public:
 	* @param color - line color. default: blue
 	* @param style - curve style. default: line
 	**/
-	virtual void addCurve(QString identifier, QColor color = QColor(Qt::blue),QwtPlotCurve::CurveStyle style = QwtPlotCurve::Lines) = 0;
+	virtual void addCurve(QString identifier, QColor color = QColor(Qt::blue), QwtPlotCurve::CurveStyle style = QwtPlotCurve::Lines) = 0;
 
 	/**
 	* removes a curve from the plotter
@@ -204,13 +208,13 @@ public:
 	**/
 
 	virtual void setAxisYRanges(double yAxisMin, double yAxisMax) = 0;
-	
+
 	/**
 	* Returns the list with MuSoCurves.
 	*
 	* @returns the list with MuSoCurves
 	**/
-	QList<MuSoCurve*> getCurves(){ return curves; }
+	QList<MuSoCurve*> getCurves() { return curves; }
 
 protected:
 	/**
@@ -221,9 +225,11 @@ protected:
 	* @returns the QwtPlotCurve with the given identifier
 	**/
 
-	QwtPlotCurve* getCurveByName(QString identifier){	QwtPlotCurve* curve = NULL;	
-														foreach(MuSoCurve* ms, curves){if(ms->getName() == identifier) curve = ms->getCurve();}		
-														return curve;	}
+	QwtPlotCurve* getCurveByName(QString identifier) {
+		QwtPlotCurve* curve = NULL;
+		foreach(MuSoCurve * ms, curves) { if (ms->getName() == identifier) curve = ms->getCurve(); }
+		return curve;
+	}
 
 
 	QList<MuSoCurve*> curves; /*!< List with MuSoCurves */
@@ -241,15 +247,16 @@ class IOGl2DOutput : public IOutput
 */
 class IOGlOutput : public IOutput
 {
-public:	
+public:
 	//! DataType
-    /*! DataType enumeration */
+	/*! DataType enumeration */
 
 	enum DataType
 	{
 		CHAR,		/*!< unsigned char data (8bit images) */
 		SHORT10,	/*!< unsigned short data (for 10bit camera acquisition) */
-		SHORT12		/*!< unsigned short data (for 12bit camera acquisition) */
+		SHORT12,	/*!< unsigned short data (for 12bit camera acquisition) */
+		CHAR_RGB	/*!< unsigned char RGB 8 data*/
 	};
 
 	/**
@@ -257,21 +264,21 @@ public:
 	*
 	* @param type DataType used for the output window.
 	*/
-	virtual void setDataType(DataType type){ this->dataType = type; }
+	virtual void setDataType(DataType type) { this->dataType = type; }
 
 	/**
 	* Sets a new unsgined char data array to display image data.
 	*
 	* @param bScan unsigned char array with 8 bit grayscale values.
 	*/
-	virtual void setData(unsigned char *bScan) = 0;
+	virtual void setData(unsigned char* bScan) = 0;
 
 	/**
 	* Sets a new unsgined short data array to display image data.
 	*
 	* @param bScan unsigned short array with 16 bit grayscale values. (10 bit or 12 bit from camera)
 	*/
-	virtual void setData(unsigned short *bScan) = 0;
+	virtual void setData(unsigned short* bScan) = 0;
 
 	/**
 	* Sets the width and height of the data array
@@ -287,7 +294,7 @@ public:
 	/**
 	* Sets the rotation angles
 	*
-	* @param xRot - angle in xRot/16.0 degrees around x-axis 
+	* @param xRot - angle in xRot/16.0 degrees around x-axis
 	* @param yRot - angle in yyRot16.0 degrees around y-axis
 	* @param zRot - angle in zRot degrees around z-axis
 	*
@@ -307,6 +314,7 @@ class OutputWindow : public QObject
 public:
 	enum OutputType
 	{
+		OPENGL2D,	/*!< OpenGl 2D */
 		OPENGL, /*!< OpenGl */
 		QWT, /*!< Qwt */
 		SHWNDWINDOW
@@ -319,13 +327,13 @@ public:
 	* @param type - output type
 	**/
 
-	OutputWindow(QString name, OutputType type){this->name = name; this->type = type;}
+	OutputWindow(QString name, OutputType type) { this->name = name; this->type = type; }
 
 	/**
 	* Destructor
 	**/
 
-	~OutputWindow(){}
+	~OutputWindow() {}
 
 	/**
 	* Returns the outpu ttype.
@@ -333,7 +341,7 @@ public:
 	* @returns the output type
 	**/
 
-	OutputType getType(){return type;}
+	OutputType getType() { return type; }
 
 	/**
 	* Returns the name of the window
@@ -341,7 +349,7 @@ public:
 	* @returns the name of the window
 	**/
 
-	QString getName(){return name;}
+	QString getName() { return name; }
 
 	/**
 	* Returns a poiter to the actual output Window.
@@ -349,7 +357,7 @@ public:
 	* @returns a poiter to the actual output Window
 	**/
 
-	IOutput* getOutput(){return output;}
+	IOutput* getOutput() { return output; }
 
 	/**
 	* Sets the pointer for the acutal output window
@@ -357,10 +365,10 @@ public:
 	* @param IOutput* pointer to output window
 	**/
 
-	void setOutput(IOutput* output){this->output = output;}
+	void setOutput(IOutput* output) { this->output = output; }
 
-	bool isShownOnStart(){return shownOnStart;}
-	void setShownOnStart(bool flag){this->shownOnStart = flag;}
+	bool isShownOnStart() { return shownOnStart; }
+	void setShownOnStart(bool flag) { this->shownOnStart = flag; }
 
 private:
 	bool shownOnStart;
@@ -386,13 +394,13 @@ public:
 	* Constructor
 	**/
 
-	Output(){}
+	Output() {}
 
 	/**
 	* Destructor
 	**/
 
-	~Output(){}
+	~Output() {}
 
 	/**
 	* Returns a list with all outputwindows
@@ -400,7 +408,7 @@ public:
 	* @returns QList with pointers to outputwindows
 	**/
 
-	QList<OutputWindow*> getOutputWindows(){return list;}
+	QList<OutputWindow*> getOutputWindows() { return list; }
 
 	/**
 	* Adds an output window to the list
@@ -409,7 +417,7 @@ public:
 	* @param type- output type
 	**/
 
-	void addOutputWindow(QString name, OutputWindow::OutputType type){list.append(new OutputWindow(name,type));}
+	void addOutputWindow(QString name, OutputWindow::OutputType type) { list.append(new OutputWindow(name, type)); }
 
 	/**
 	* Returns the specific IOutput pointer to the given name
@@ -419,8 +427,10 @@ public:
 	* NOTE: Remember to use different names to ensure unique acces to the output windows!
 	**/
 
-	IOutput* getOutputWindowByName(QString name){	foreach(OutputWindow* out,list){  if(out->getName() == name) return out->getOutput(); }
-													return NULL; }
+	IOutput* getOutputWindowByName(QString name) {
+		foreach(OutputWindow * out, list) { if (out->getName() == name) return out->getOutput(); }
+		return NULL;
+	}
 
 private:
 	QList<OutputWindow*> list; /*!< List with output window pointers */
@@ -444,7 +454,7 @@ public:
 	*
 	* @param pt - point to copy
 	**/
-	CPoint3d(const CPoint3d &pt) { *this = pt; }
+	CPoint3d(const CPoint3d& pt) { *this = pt; }
 
 	/**
 	* constructor with parameters
@@ -518,10 +528,11 @@ public:
 	*
 	* @returns the euclidian distance from a second point
 	**/
-	float getDistance(CPoint3d pt) { return (float)( sqrt( pow( (m_x-pt.getX()), 2 ) 
-												    +pow( (m_y-pt.getY()), 2 )
-												    +pow( (m_z-pt.getZ()), 2 ) )); 
-									 }
+	float getDistance(CPoint3d pt) {
+		return (float)(sqrt(pow((m_x - pt.getX()), 2)
+			+ pow((m_y - pt.getY()), 2)
+			+ pow((m_z - pt.getZ()), 2)));
+	}
 
 private:
 	float m_x;/*!< x-coordinate */
@@ -564,7 +575,11 @@ public:
 		DELAYGENERATOR,
 		ENERGYSENSOR,
 		SHUTTER,
-		WAVEFRONT_MODULATOR
+		WAVEFRONT_MODULATOR,
+		SERIALLIGHTSOURCE,
+		LIQUIDLENS,
+		FORCESENSOR,
+		NETWORKCOMMUNICATION
 	};
 
 	//! OutputType
@@ -572,6 +587,7 @@ public:
 
 	enum OutputType
 	{
+		OPENGL2D,	/*!< OpenGl 2D */
 		OPENGL, /*!< OpenGl */
 		QWT, /*!< Qwt */
 		SHWNDWINDOW
@@ -582,7 +598,7 @@ public:
 	* Destructor
 	**/
 
-	virtual ~IHardware(){}
+	virtual ~IHardware() {}
 
 	/**
 	* Detects the the status of the hardware.
@@ -595,7 +611,7 @@ public:
 	* @see bIsDetectable
 	* @see isDetectable()
 	*
-	**/ 
+	**/
 
 	virtual bool detect() = 0;
 
@@ -611,7 +627,7 @@ public:
 
 	/**
 	* Returns the GUI of the Plugin in due form.
-	* 
+	*
 	* @returns a QDockWidget with user control elemts to control the plugin
 	*
 	**/
@@ -619,11 +635,11 @@ public:
 
 	/**
 	* Releases the Plugin and cleans up the memory. This Method is called automatically.
-	* 
+	*
 	* @returns true if succesfull, false otherwise
 	**/
 
-	virtual bool release()=0;
+	virtual bool release() = 0;
 
 	/**
 	* Returns the name of the plugin.
@@ -631,7 +647,7 @@ public:
 	* @returns the name of the plugin
 	**/
 
-	QString getName(){return name;}
+	QString getName() { return name; }
 
 	/**
 	* Sets the name of the Plugin
@@ -640,8 +656,8 @@ public:
 	*
 	**/
 
-	void setName(QString name) {this->name = name; }
-	
+	void setName(QString name) { this->name = name; }
+
 	/**
 	* Returns the id of the plugin
 	*
@@ -649,7 +665,7 @@ public:
 	*
 	**/
 
-	int getId(){return id;}
+	int getId() { return id; }
 
 	/**
 	* Sets the id of the plugin
@@ -658,7 +674,7 @@ public:
 	*
 	**/
 
-	void setId(int id) {this->id = id;}
+	void setId(int id) { this->id = id; }
 
 	/**
 	* Returns the device typ.
@@ -669,7 +685,7 @@ public:
 	*
 	**/
 
-	DeviceType getType(){return deviceType; }
+	DeviceType getType() { return deviceType; }
 
 	/**
 	* Sets the device type of the plugin.
@@ -678,18 +694,18 @@ public:
 	*
 	* @see DeviceType
 	*
-	**/ 
+	**/
 
-	void setType(DeviceType deviceType){this->deviceType = deviceType; }
+	void setType(DeviceType deviceType) { this->deviceType = deviceType; }
 
 	/**
 	* Returns wheather the plugin is detectable or not.
-	* 
+	*
 	* @returns true, if detectable, otherwise false.
 	*
 	**/
 
-	bool isDetected(){ return bIsDetected; }
+	bool isDetected() { return bIsDetected; }
 
 	/**
 	* Sets the flag, wheather the hardware is detectable or not.
@@ -698,7 +714,7 @@ public:
 	*
 	**/
 
-	void setDetected(bool bFlag){bIsDetected = bFlag; }
+	void setDetected(bool bFlag) { bIsDetected = bFlag; }
 
 	/**
 	* Returns wheather the plugin is initialized or not
@@ -707,8 +723,8 @@ public:
 	*
 	**/
 
-	bool isInitialized() {return bIsInitialized;}
-	
+	bool isInitialized() { return bIsInitialized; }
+
 	/**
 	* Sets the flag, wheather the plugin is initialized or not
 	*
@@ -716,7 +732,7 @@ public:
 	*
 	**/
 
-	void setInitialized(bool bFlag){bIsInitialized = bFlag;}
+	void setInitialized(bool bFlag) { bIsInitialized = bFlag; }
 
 	/**
 	* Returns the has output flag
@@ -725,16 +741,16 @@ public:
 	*
 	**/
 
-	bool hasOutput(){return bHasOutput;}
-	
+	bool hasOutput() { return bHasOutput; }
+
 	/**
 	* Sets the has ouput flag.
 	*
 	* @param true, if has output otherwise false
 	*
 	**/
-	
-	void setOutput(bool bFlag){bHasOutput = bFlag; }
+
+	void setOutput(bool bFlag) { bHasOutput = bFlag; }
 
 	/**
 	* Returns wheather the hardware is detectable or not
@@ -743,7 +759,7 @@ public:
 	*
 	**/
 
-	bool isDetectable(){return bIsDetectable;}
+	bool isDetectable() { return bIsDetectable; }
 
 	/**
 	* Sets wheather the hardware is detectable or not.
@@ -752,8 +768,8 @@ public:
 	*
 	*/
 
-	void setDetectable(bool bFlag){bIsDetectable = bFlag; }
-	
+	void setDetectable(bool bFlag) { bIsDetectable = bFlag; }
+
 	/**
 	* Returns a pointer to the output window
 	*
@@ -762,15 +778,15 @@ public:
 	**/
 
 	virtual IOutput* getOutput() = 0;
-	
+
 	/**
 	* Sets the output window
 	*
 	* @param IOutput - pointer to output window.
 	*
 	*/
-	
-	void setOutput(IOutput* pOut){this->mdi = pOut;}
+
+	void setOutput(IOutput* pOut) { this->mdi = pOut; }
 
 	/**
 	* Returns the output type
@@ -779,8 +795,8 @@ public:
 	*
 	**/
 
-	OutputType getOutputType(){return outputType; }
-	
+	OutputType getOutputType() { return outputType; }
+
 	/**
 	* Sets the output type.
 	*
@@ -788,7 +804,7 @@ public:
 	*
 	**/
 
-	void setOutputType(OutputType outputType){this->outputType=outputType;}
+	void setOutputType(OutputType outputType) { this->outputType = outputType; }
 
 	/**
 	* Returns a map with relevant data for saving process
@@ -798,16 +814,16 @@ public:
 	**/
 
 	virtual QMap<QString, QString> getSaveValueInformation() = 0;
-	
+
 	/**
 	* Sets a map with loaded data.
 	*
 	* @param a map with loaded data.
 	*
 	**/
-		
-	virtual void setLoadValueInformation(QMap<QString,QString> map) = 0;
-	
+
+	virtual void setLoadValueInformation(QMap<QString, QString> map) = 0;
+
 	/**
 	* Returns a xml valid name for the plugin
 	*
@@ -815,7 +831,7 @@ public:
 	*
 	**/
 
-	QString getXmlName(){return xmlName;}
+	QString getXmlName() { return xmlName; }
 
 	/**
 	* Shows a settings Window with preferences for the plugin
@@ -823,29 +839,29 @@ public:
 
 	virtual void showSettingsWindow() = 0;
 
-	GlobalParameter* getGlobalParameter(){return globalParam;}
+	GlobalParameter* getGlobalParameter() { return globalParam; }
 
-	Output output(){return pOutput;}
+	Output output() { return pOutput; }
 
 	/**
 	* Set device as master device if true,
 	* as slave device if false
 	* @param master - master(true), slave(false)
 	**/
-	void setMasterDevice(bool master){ this->bMasterDevice = master; }
+	void setMasterDevice(bool master) { this->bMasterDevice = master; }
 
 	/**
 	* Returns if device is master device.
 	* @returns state of the variable masterDevice
 	**/
-	bool isMasterDevice(){ return this->bMasterDevice; }
+	bool isMasterDevice() { return this->bMasterDevice; }
 
 
 protected:
-	GlobalParameter *globalParam;
+	GlobalParameter* globalParam;
 	Output pOutput;
 	OutputType outputType; /*!< outputType data field */
-	IOutput *mdi; /*!< Output window */
+	IOutput* mdi; /*!< Output window */
 	QString name; /*!< Plugin name */
 	QString xmlName; /*!< xml valid plugin name */
 	int id; /*!< unique id */
@@ -859,7 +875,7 @@ protected:
 signals:
 	void openOutputWindow(QMdiSubWindow*); /*!< signal to open a Subwindow in main software */
 	void update(); /*!< update signal */
-	void updateQwtOutput(QString,QVector<qreal>*,QVector<qreal>*);
+	void updateQwtOutput(QString, QVector<qreal>*, QVector<qreal>*);
 };
 
 //! IStage
@@ -868,6 +884,7 @@ signals:
 
 class IStage : public IHardware
 {
+	Q_OBJECT
 public:
 
 	/**
@@ -878,8 +895,17 @@ public:
 	* @returns true if succesful, false otherwise
 	*
 	**/
-	virtual bool moveTo(double pos,int id=0) = 0;
+	virtual bool moveTo(double pos, int id = 0) = 0;
 
+	/**
+	* Moves a stage to a position absolutely
+	*
+	* @param pos - absolute position
+	*
+	* @returns true if succesful, false otherwise
+	*
+	**/
+	virtual bool moveTo(double* pos, const char* axes) = 0;
 
 	/**
 	* Moves to currentPosition + step*stepSize
@@ -891,7 +917,7 @@ public:
 	* @returns true if succesful, false otherwise
 	*
 	**/
-	virtual bool moveSteps(int steps, double stepSize) = 0;
+	virtual bool moveSteps(double steps, int id = 0) = 0;
 
 
 	/**
@@ -900,7 +926,15 @@ public:
 	* @returns the current position
 	*
 	**/
-	virtual double getPosition() = 0;
+	virtual double* getPosition(const char* axes) = 0;
+
+	/**
+	* Returns the current position
+	*
+	* @returns the current position
+	*
+	**/
+	virtual double* getPosition() = 0;
 
 
 	/**
@@ -912,6 +946,9 @@ public:
 	*
 	**/
 	virtual bool stop() = 0;
+
+signals:
+	void newPositionAvailable(QVector<qreal>* position, int id);
 };
 
 //! ISystem
@@ -924,7 +961,7 @@ class ISystem : public IHardware
 public:
 	//! State
 	/*! State enumeration */
-	enum State{
+	enum State {
 		READY,				/*!< system is in ready state */
 		ACTIVE,				/*!< system is in active state */
 		FAILURE,			/*!< system is in failure state */
@@ -950,19 +987,19 @@ public:
 		ISystem::ScanShape scanShape;
 	} SystemParams;
 
-	SystemParams *params;
+	SystemParams* params;
 
 	/**
 	* Starts the system
 	**/
 
-	virtual void startSystem()=0;
-	
+	virtual void startSystem() = 0;
+
 	/**
 	* Stops the system
 	**/
 
-	virtual void stopSystem()=0;
+	virtual void stopSystem() = 0;
 
 	/**
 	* Returns an array of data
@@ -983,22 +1020,22 @@ public:
 	*
 	**/
 
-	virtual int getParam()=0;
-	virtual void setParam(double)=0;
+	virtual int getParam() = 0;
+	virtual void setParam(double) = 0;
 
 	/**
 	* Returns the state of the system.
 	* @returns the state of the system
 	* @see State
 	**/
-	State getState(){ return state; }
+	State getState() { return state; }
 
 	/**
 	* Sets the state of the system.
 	* @param the state of the system
 	* @see State
-	**/ 
-	void setState(State st){ if(getState() != st){ state = st; emit stateChanged(); } }
+	**/
+	void setState(State st) { if (getState() != st) { state = st; emit stateChanged(); } }
 
 protected:
 	State		state;	/*!< state of the system */
@@ -1006,7 +1043,7 @@ protected:
 
 signals:
 	/** signal that new raw data was acquired **/
-	void dataAcquired(unsigned short*);	
+	void dataAcquired(unsigned short*);
 	/** signal that state was changed **/
 	void stateChanged();
 };
@@ -1047,6 +1084,13 @@ public:
 	virtual void snapFrame() = 0;
 
 	/**
+	* Snaps a single frame and sets its file name to fileName
+	*
+	* @param fileName is the file name of the captured image
+	**/
+	virtual void snapFrame(QString fileName) = 0;
+
+	/**
 	* Returns an array of data
 	*
 	* @returns an unsigned short* array with plugin specific data
@@ -1065,14 +1109,30 @@ public:
 	**/
 	virtual unsigned char* getData_uchar() = 0;
 
-	virtual void setSavePath(QString)=0;
+	virtual void setSavePath(QString) = 0;
+
+	/**
+	* Returns current exposure time in us
+	*
+	* @returns current exposure time in us
+	*
+	**/
+	virtual double getExposureTime() = 0;
+
+	/**
+	* Returns current exposure time in us
+	*
+	* @returns current exposure time in us
+	*
+	**/
+	virtual void setExposureTime(double) = 0;
 
 
 signals:
 	void snapTaken(QString);
 public slots:
-	virtual void changeSize(int,int)=0;
-	
+	virtual void changeSize(int, int) = 0;
+
 
 };
 
@@ -1084,65 +1144,75 @@ class ISpectrometer : public IHardware
 {
 	Q_OBJECT
 public:
-
-	/** CameraModel enumeration **/
-	enum CameraModel{
-		BASLER_SPL2048_140KM			= 0,	/*!< Basler sprint spL2048-140km */
-		ATMEL_AVIIVA_E2V_M4CL_2010_OCT	= 1,	/*!< Aviva EM4 CL 20x10 OCT camera */
-		WASATCH_INTERNAL_SENSOR			= 2		/*!< Internal camera sensor of Wasatch Photonics */
+	/** BitDepth enumeration **/
+	enum BitDepth {
+		BD_8BITS = 0,
+		BD_10BITS = 1,
+		BD_12BITS = 2
 	};
 
-	/** ExposureMode enumeration **/
-	enum ExposureMode{
-		FREE_RUN = 0,
+	/** TriggerOutput enumeration **/
+	enum TriggerOutput {
+		INT_TRIGGERED = 0,
 		EXT_TRIGGERED = 1
 	};
 
 	/** TriggerMode enumeration **/
-	enum TriggerMode{
-		PROGRAMMABLE = 0,
+	enum TriggerMode {
+		TTL_PROGRAMMABLE = 0,
 		LEVEL_CONTROLLED = 1,
-		EDGE_CONTROLLED = 2
+
+	};
+
+	/** TriggerEvent enumeration **/
+	enum TriggerEvent {
+		ACTIVE_HIGH = 0,
+		ACTIVE_LOW = 1,
+		EDGE_RISING = 2,
+		EDGE_FALLING = 3
 	};
 
 	//! State
 	/*! State enumeration */
-	enum State{
-		READY,				/*!< spectrometer is ready for acquisition */
-		ACTIVE,				/*!< spectrometer is in active state */
-		FAILURE,			/*!< spectrometer is in failure state */
-		UNDEFINED			/*!< spectrometer is in undefined state */
-	};
-
-	//! BitDepth
-	/*! BitDepth enumeration */
-    enum BitDepth{
-		BD_8BITS,
-		BD_10BITS,
-		BD_12BITS,
+	enum State {
+		READY = 0,		/*!< spectrometer is ready for acquisition */
+		ACTIVE = 1,		/*!< spectrometer is in active state */
+		FAILURE = 2,		/*!< spectrometer is in failure state */
+		UNDEFINED = 3			/*!< spectrometer is in undefined state */
 	};
 
 	typedef struct {
-		ISpectrometer::CameraModel cameraModel;
-		ISpectrometer::BitDepth bitDepth;
-		int	lineAcquisitionMode;				/*	0:"Single Line [Max 70KHz]", 1:"Dual Line [Max 140KHz] - Line A First", 
+
+
+		QString cameraModel; //TODO: to int plus cameraName read out from xml
+		QString comPort;
+		int bitDepth;
+		int triggerInput;
+		int	triggerOutput;
+		int triggerMode;
+		int triggerEvent;
+		int triggerPort;
+		int triggerFrequency;
+		int triggerSource;
+		int	lineWidth;
+		int	lineStart;
+		int linesPerFrame; //mz: nur aus legacy gründen. kann gelöscht werden sobald alle plugins/jobs nicht mehr auf linesPerFrame zugreifen, sondern auf frameWidth
+		int frameWidth;
+		int frameFrequency;
+		int gain;
+		int offset;
+		int integrationTime;
+		int lineTime;
+		int isLineScanning;
+		double dechirpLineCoeffs[4];
+		int	lineAcquisitionMode;				/*	0:"Single Line [Max 70KHz]", 1:"Dual Line [Max 140KHz] - Line A First",
 													2:"Vertical Binning", 3:"Line Sum - A Delayed",
 													4:"Line Sum - B Delayed", 5:"Line Averaging"
 													6:"Line Avg - A Delayed", 7:"Line Avg - B Delayed"	*/
 		int	horizontalBinning;					/*	0:"Off", 1:"On"	*/
-		ISpectrometer::ExposureMode	exposureMode;
-		ISpectrometer::TriggerMode triggerMode;
-		int	lineWidth;
-		int	lineStartingPixel;
-		int linesPerFrame;
-		double gain;
-		double offset;
-		double exposureTime;
-		double lineTime;
-		double dechirpLineCoeffs[4];
 	} SpectrometerParams;
 
-	SpectrometerParams *params;
+	SpectrometerParams* params;
 
 	/**
 	* Prepares the spectrometer for the acquisition
@@ -1190,6 +1260,41 @@ public:
 	virtual void accept() = 0;
 
 	/**
+	* Setter and getter of the spectrometer
+	*
+	**/
+
+	// TODO: add descriptions or delete all!!!
+	//virtual IFramegrabberAttachedCameraInterface* getCamera() = 0; ???
+	//virtual void loadCameraConfigFile(QString fileLocation) = 0; ???
+	//virtual void setCamera(IFramegrabberAttachedCameraInterface*) = 0; ???
+	// TODO: add IFramegrabberAttachedCameraInterface and IFramegrabberInterface to interfaces
+	virtual int getBitDepth() = 0;
+	virtual int setBitDepth(int bd) = 0;
+	virtual int getTriggerOutput() = 0;
+	virtual int setTriggerOutput(int to) = 0;
+	virtual int getTriggerMode() = 0;
+	virtual int setTriggerMode(int tm) = 0;
+	virtual int getTriggerEvent() = 0;
+	virtual int setTriggerEvent(int te) = 0;
+	//virtual int getTriggerFrequency() = 0;
+	//virtual int setTriggerFrequency(int tf) = 0;
+	virtual int getTriggerPort() = 0;
+	virtual int setTriggerPort(int tp) = 0;
+	//virtual int getTriggerSource() = 0;
+	//virtual int setTriggerSource(int ts) = 0;
+	virtual int getLineStart() = 0;
+	virtual int setLineStart(int sp) = 0;
+	virtual int getLineWidth() = 0;
+	virtual int setLineWidth(int lw) = 0;
+	virtual int getFrameWidth() = 0;
+	virtual int setFrameWidth(int fw) = 0;
+	virtual int getFrameFrequency() = 0;
+	virtual int setFrameFrequency(int ff) = 0;
+	virtual int getParameter(int paramID) = 0;
+	virtual int setParameter(int paramID, int value) = 0;
+
+	/**
 	* Returns the state of the spectrometer.
 	*
 	* @returns the state of the spectrometer
@@ -1197,7 +1302,7 @@ public:
 	* @see State
 	*
 	**/
-	State getState(){ return state; }
+	State getState() { return state; }
 
 	/**
 	* Sets the state of the spectrometer.
@@ -1206,16 +1311,19 @@ public:
 	*
 	* @see State
 	*
-	**/ 
-	void setState(State st){ if(getState() != st){ state = st; emit stateChanged(); } }
+	**/
+	void setState(State st) { if (getState() != st) { state = st; emit stateChanged(); } }
 
 protected:
 	State state;	/*!< state of the spectrometer */
 
 signals:
+	void paramsChanged();
 	void stateChanged();
+	void frameAcquired(int);
 	void frameAcquired(unsigned short*);
 	void frameAcquired(unsigned char*);
+
 };
 
 //! IDelayGenerator
@@ -1227,7 +1335,7 @@ class IDelayGenerator : public IHardware
 public:
 	/**
 	* Sets the delay for a given card
-	* 
+	*
 	* @param t - flag for channel t
 	* @param channelT - delay for channel T
 	* @param a - flag for channel A
@@ -1238,7 +1346,7 @@ public:
 	*
 	**/
 
-	virtual void setDelay(bool t,double channelT,bool a, double channelA, bool b, double channelB,bool gate, long dgNumber) = 0;
+	virtual void setDelay(bool t, double channelT, bool a, double channelA, bool b, double channelB, bool gate, long dgNumber) = 0;
 
 	/**
 	* Returns the number of cards plugged in.
@@ -1301,176 +1409,86 @@ public:
 		UNDEFINED			/*!< scanner is in undefined state */
 	};
 
-	//! ScanShape
-	/*! ScanShape enumeration */
-	enum ScanShape
-	{
-		LINE,		/*!< line scan */
-		CIRCLE,		/*!< circle scan */
-		CROSS,		/*!< cross scan */
-		STAR,		/*!< star scan */
-		VOLUME		/*!< volume scan */
-	};
-
-	typedef struct {
-		// scan job parameter
-		char	scanJobName[32];
-		double	initXPos;
-		double	initYPos;
-		unsigned char	initFrameTrigger;
-		unsigned char	initLineTrigger;
-		double	offsetXPos;
-		double	offsetYPos;
-		int		pointsPerLine;
-		int		numberOfScans;
-		double	scansPerSec;
-		bool	extTriggered;
-		double  sampleRate;
-		int		samplePoints;
-		IScanner::ScanShape	scanShape;
-		// specific parameter for line scan
-		CPoint3d line_spt;
-		CPoint3d line_ept;
-		// specific parameter for volume scan
-		CPoint3d	volume_spt;
-		CPoint3d	volume_ept;
-		int			volume_bScansPerVol;
-		// specific parameter for cross scan
-		CPoint3d	cross_center;
-		double		cross_length_1;
-		double		cross_length_2;
-		double		cross_rotation;
-		// LUT x-coordinates (polynom 4th grade)
-		double lutX_c0;
-		double lutX_c1;
-		double lutX_c2;
-		double lutX_c3;
-		double lutX_c4;
-		// LUT y-coordinates (polynom 4th grade)
-		double lutY_c0;
-		double lutY_c1;
-		double lutY_c2;
-		double lutY_c3;
-		double lutY_c4;
-	} ScannerParams;
-
-	ScannerParams *params;
 
 	/**
 	* Start job on scanner
 	**/
 	virtual void startJob() = 0;
 
+
 	/**
 	* Abort active job
 	**/
 	virtual void abortJob() = 0;
 
-	/**
-	* Clears all jobs from scanner device
-	**/
-	virtual void clearJobs() = 0;
-
-	/**
-	* Creates a job
-	* @param params - parameters of the scanner device
-	**/
-	virtual void createJob(ScannerParams *params) = 0;
-
-	/**
-	* Accepts current parameters
-	**/
-	virtual void accept() = 0;
-
 
 	/**
 	* Send data stream to scanner
+	* @param name - scan job name
 	* @param xData - analog output data for x axis
 	* @param yData - analog output data for y axis
 	* @param mData - modulation data for digital output
 	* @param numOfPts - number of sample points per analog/digital output
 	* @param repeat - repetitions of scanjob, -1: until stopped
+	* @returns an error code
 	**/
-	virtual void sendDataStream(double *xData, double *yData, unsigned char *mData, int numOfPts, int repeat) = 0;
+	virtual int sendJob(QString name, float* xData, float* yData, unsigned char* mData, int numOfPts, int repeat) = 0;
 
 
 	/**
-	* Move the scanner to specified position
-	* @param pt - point to move to
+	* load job from file and send it to scanner scanner
+	* @param fileName - path of file
 	**/
-	virtual void moveToPosition(CPoint3d &pt) = 0;
-
+	virtual void loadJob(QString fileName) = 0;
 
 	/**
-	* Returns the state of the scanner.
-	*
-	* @returns the state of the scanner
-	*
-	* @see State
-	*
+	* save current job to file
+	* @param fileName - path of file
 	**/
-	State getState(){ return state; }
+	virtual void saveJob(QString fileName) = 0;
 
 	/**
-	* Sets the state of the scanner.
-	*
-	* @param the state of the scanner
-	*
-	* @see State
-	*
-	**/ 
-	void setState(State st){ if(getState() != st){ this->state = st; emit stateChanged(); } }
-
-	/**
-	* Returns the scan shape.
-	*
-	* @returns the scan shape
-	*
-	* @see ScanShape
-	*
+	* Set scanner externally triggered
+	* @param triggered - true or false
 	**/
-	ScanShape getScanShape(){return scanShape; }
+	virtual void setExtTriggered(bool triggered) = 0;
+
 
 	/**
-	* Sets the scan shape of the scanner.
-	*
-	* @param the scan shape
-	*
-	* @see ScanShape
-	*
-	**/ 
-	void setScanShape(ScanShape scanShape){this->scanShape = scanShape; }
+	* Is scanner externally triggered?
+	**/
+	virtual bool isExtTriggered() = 0;
 
 
 	/**
 	* Set sample rate (in free run mode)
 	* @param sps - samples per second
 	**/
-	void setSampleRate(double sps){ params->sampleRate = sps; }
+	virtual void setSampleRate(float sps) = 0;
 
 
 	/**
 	* Get sample rate (in free run mode) in samples per second
 	**/
-	double getSampleRate(){ return params->sampleRate; }
-
-	
-	/**
-	* Set scanner externally triggered
-	* @param triggered - true or false
-	**/
-	void setExtTriggered(bool triggered){ params->extTriggered = triggered; }
+	virtual float getSampleRate() = 0;
 
 
 	/**
-	* Is externally triggered?
+	* Returns the state of the scanner.
+	* @returns the state of the scanner
+	* @see State
 	**/
-	bool isExtTriggered(){ return params->extTriggered; }
+	State getState() { return state; }
 
+	/**
+	* Sets the state of the scanner.
+	* @param the state of the scanner
+	* @see State
+	**/
+	void setState(State st) { if (getState() != st) { this->state = st; emit stateChanged(); } }
 
 protected:
-	State		state;			/*!< state of the scanner */
-	ScanShape	scanShape;		/*!< the scan shape */
+	State state;	/*!< state of the scanner */
 
 signals:
 	void stateChanged();
@@ -1488,94 +1506,94 @@ public:
 	/**
 	* Starts measurement and ends it as soon as "int measurements" (or more) values were measured
 	*
-	* @param deviceNr		number of usb interface 
-	* @param channel		every energy sensor head has its own channel. (i.e. channel defines the sensor you want to use) If you want to use both sensors simultaneously, use for "channel" any value greater than 1. 
+	* @param deviceNr		number of usb interface
+	* @param channel		every energy sensor head has its own channel. (i.e. channel defines the sensor you want to use) If you want to use both sensors simultaneously, use for "channel" any value greater than 1.
 	* @param measurements	number of values to be recorded. Measurement stops automatically. If you want to stop measurement manually set measurements = 0
 	*
-	**/ 
+	**/
 	virtual void startConditionedMeasurement(int deviceNr, int channel, int measurements) = 0;
 
 
 	/**
 	* Returns pointer to QVector with measured data
 	*
-	* @param deviceNr	number of usb interface 
-	* @param channel	every energy sensor head has its own channel. (i.e. channel defines the sensor you want to interact with) 
-	*					
-	**/ 
+	* @param deviceNr	number of usb interface
+	* @param channel	every energy sensor head has its own channel. (i.e. channel defines the sensor you want to interact with)
+	*
+	**/
 	virtual QVector<qreal>* getDataPointer(int deviceNr, int channel) = 0;
 
 
 	/**
 	* Returns pointer to QVector with time values that matches to measured data values
 	*
-	* @param deviceNr	number of usb interface 
-	* @param channel	every energy sensor head has its own channel. (i.e. channel defines the sensor you want to interact with) 
-	*					
-	**/ 
+	* @param deviceNr	number of usb interface
+	* @param channel	every energy sensor head has its own channel. (i.e. channel defines the sensor you want to interact with)
+	*
+	**/
 	virtual QVector<qreal>* getTimePointer(int deviceNr, int channel) = 0;
 
 
 	/**
 	* Returns pointer to QVector with status values that matches to measured data values
 	*
-	* @param deviceNr	number of usb interface 
-	* @param channel	every energy sensor head has its own channel. (i.e. channel defines the sensor you want to interact with) 
-	*					
-	**/ 
+	* @param deviceNr	number of usb interface
+	* @param channel	every energy sensor head has its own channel. (i.e. channel defines the sensor you want to interact with)
+	*
+	**/
 	virtual QVector<qreal>* getStatusPointer(int deviceNr, int channel) = 0;
 
 
 	/**
 	* Returns true while measuring, false otherwise
 	*
-	* @param deviceNr	number of usb interface 
-	* @param channel	every energy sensor head has its own channel. (i.e. channel defines the sensor you want to interact with) 
-	*					
-	**/ 
+	* @param deviceNr	number of usb interface
+	* @param channel	every energy sensor head has its own channel. (i.e. channel defines the sensor you want to interact with)
+	*
+	**/
 	virtual bool isMeasuring(int deviceNr, int channel) = 0;
 
 
 	/**
 	* Stops current measurement
-	*					
-	**/ 
+	*
+	**/
 	virtual void stopCurrentMeasurement() = 0;
-	
+
 	/**
 	* Gets range  (0: 20uJ -- 1: 2uJ -- 2: 200nJ -- 3: 20nJ)
 	*
-	* @param deviceNr	number of usb interface 
-	* @param channel	every energy sensor head has its own channel. (i.e. channel defines the sensor you want to interact with) 	
+	* @param deviceNr	number of usb interface
+	* @param channel	every energy sensor head has its own channel. (i.e. channel defines the sensor you want to interact with)
 	*
-	**/ 
+	**/
 	virtual int getRange(int deviceNr, int channel) = 0;
 
 
 	/**
-	* Sets range 
+	* Sets range
 	*
-	* @param deviceNr	number of usb interface 
-	* @param channel	every energy sensor head has its own channel. (i.e. channel defines the sensor you want to interact with) 
-	* @param range		0: 20uJ -- 1: 2uJ -- 2: 200nJ -- 3: 20nJ 	
+	* @param deviceNr	number of usb interface
+	* @param channel	every energy sensor head has its own channel. (i.e. channel defines the sensor you want to interact with)
+	* @param range		0: 20uJ -- 1: 2uJ -- 2: 200nJ -- 3: 20nJ
 	*
-	**/ 
+	**/
 	virtual void setRange(int deviceNr, int channel, int rangeIndex) = 0;
 
 
 	/**
-	* Gets the measurement condition. The condition determines when and if the measurement will stop automatically. The condition value is the number of measurement values that have to be recorded before the measurement stops automatically.  
-	*					
-	**/ 
+	* Gets the measurement condition. The condition determines when and if the measurement will stop automatically. The condition value is the number of measurement values that have to be recorded before the measurement stops automatically.
+	*
+	**/
 	virtual int getCondition() = 0;
 
 
 	/**
-	* Sets the measurement condition. The condition determines when and if the measurement will stop automatically. The condition value is the number of measurement values that have to be recorded before the measurement stops automatically.  
+	* Sets the measurement condition. The condition determines when and if the measurement will stop automatically. The condition value is the number of measurement values that have to be recorded before the measurement stops automatically.
 	*
-	* @param condition	if value of condition is 0, measurement will not stop automatically. 
-	*					
-	**/ 
+	* @param condition	if value of condition is 0, measurement will not stop automatically.
+	*
+	**/
 	virtual void setCondition(int condition) = 0;
 
 
@@ -1593,20 +1611,20 @@ class IShutterController : public IHardware
 public:
 	/**
 	* Returns true if shutter is open, otherwise false
-	*					
-	**/ 
+	*
+	**/
 	virtual bool isOpen() = 0;
 
 	/**
 	* Opens shutter and returns true if shutter is opened, otherwise false
-	*					
-	**/ 
+	*
+	**/
 	virtual bool open() = 0;
 
 	/**
 	* Closes shutter and returns true if shutter is closed, otherwise false
-	*					
-	**/ 
+	*
+	**/
 	virtual bool close() = 0;
 
 };
@@ -1619,13 +1637,225 @@ class IWavefrontModulator : public IHardware
 	Q_OBJECT
 public:
 	typedef struct {
-		
+
 	} WavefrontModulatorParams;
 
-	WavefrontModulatorParams *params;
+	WavefrontModulatorParams* params;
+
+	/**
+	* Set wavefront modulation command
+	*
+	* @param data	command data (e.g. actuator voltages of a deformable mirror)
+	*
+	**/
+	virtual void setCommand(QVector<qreal>* data) = 0;
+
+
+	/**
+	* Get current set wavefront modulation command
+	*
+	* \attention	last set command may not be the currently applied command.
+	*
+	**/
+	virtual QVector<qreal> getCommand() = 0;
+
+
+	/**
+	* Get zero wavefront modulator state. (e.g. flat command for deformable mirror)
+	*
+	*  @returns wavefront modulator state which has no modulation effects
+	*
+	**/
+	virtual QVector<qreal> getZeroCommand() = 0;
+
+
+	/**
+	* Apply wavefront modulation command that was already set
+	*
+	**/
+	virtual bool applySetCommand() = 0;
+
+	/**
+	* Apply wavefront modulation command
+	*
+	* @param data	command data (e.g. Actuator voltages of a deformable mirror)
+	*
+	**/
+	virtual bool applyCommand(QVector<qreal>* data) = 0;
+
+
+public slots:
+
+
+signals:
+	void applied();
+};
+
+//! ISerialLightsource
+/*! ISerialLightsource interface for lightsource (SLD) via serial port implementation
+*/
+
+class ISerialLightsource : public IHardware
+{
+	Q_OBJECT
+public:
+
+	enum SerialBaudrate
+	{
+		BAUDRATE110 = 110,
+		BAUDRATE300 = 300,
+		BAUDRATE600 = 600,
+		BAUDRATE1200 = 1200,
+		BAUDRATE2400 = 2400,
+		BAUDRATE4800 = 4800,
+		BAUDRATE9600 = 9600,
+		BAUDRATE19200 = 19200,
+		BAUDRATE38400 = 38400,
+		BAUDRATE57600 = 57600,
+		BAUDRATE115200 = 115200
+	};
+
+	/**
+	* Check all detected serial ports and deliver list pointer with vectors of strings of:
+	* port name, friendly name, physical name and enumartor name
+	*
+	**/
+	virtual QList<QVector<QString>>* checkAllSerialPort() = 0;
+
+	/**
+	* Check SLD status and set it to the defined status: SLD off in low power mode
+	*
+	* @param portname	name of serial port of SLD from the detected ones (i.e. COM4)
+	*
+	**/
+	virtual void initSLD(QString portName) = 0;
+	virtual void deinitSLD() = 0;
+
+	/**
+	* Switch SLD on or off
+	*
+	**/
+	virtual void setOnSLD() = 0;
+	virtual void setOffSLD() = 0;
+
+	/**
+	* Switch to high or low power mode
+	*
+	**/
+	virtual void setToHighPowerMode() = 0;
+	virtual void setToLowPowerMode() = 0;
+
+	/**
+	* Establish port connection for communication with SLD via serial port (QextserialPort
+	*
+	**/
+	virtual bool openSerialPortConnection(QString portname, SerialBaudrate sb) = 0;
+
+	/**
+	* Gets SLD status pointer of bitarray with actual configuration and failure/error bit
+	*
+	**/
+	virtual int getSLDStatusCode() = 0;
+
+protected:
+	SerialBaudrate		serialBaudrate;
+
+signals:
+	void signalReadBuffer();
+	void signalSLDFailure();
+
 };
 
 
+//! ILiquidLens
+/*! ILiquidLens interface for tunable liquid lens implementation
+*/
+class ILiquidLens : public IHardware
+{
+	Q_OBJECT
+public:
+	/**
+	* Set liquid lens to relative position between 0..1
+	**/
+	virtual void setPosition(double pos) = 0;
+
+	/**
+	* Get liquid lens relative position between 0..1
+	**/
+	virtual double getPosition() = 0;
+
+	/**
+	* Set liquid lens externally controlled by e.g. analog signal
+	**/
+	virtual void setExternallyControlled(bool) = 0;
+
+	/**
+	* Checks if the liquid lens is externally controlled
+	**/
+	virtual bool isExternallyControlled() = 0;
+};
+
+//! IForceSensor
+/*! IForceSensor interface for force sensor implementation
+*/
+class IForceSensor : public IHardware
+{
+	Q_OBJECT
+public:
+	/**
+	* Add new sensor with index
+	**/
+	virtual void addSensor(int id) = 0;
+
+	/**
+	* Add new sensor with index
+	**/
+	virtual void removeSensor(int id) = 0;
+
+	/**
+	* Get force value for specific sensors in mN
+	**/
+	virtual double getForce(int id) = 0;
+
+	/**
+	* Get force values for all added sensors in mN
+	**/
+	virtual double* getForce() = 0;
+
+	/**
+	* Get force values for all added sensors in mN
+	**/
+	virtual bool start() = 0;
+
+	/**
+	* Get force values for all added sensors in mN
+	**/
+	virtual bool stop() = 0;
+
+signals:
+	void newDataAvailable(QVector<qreal>* data, QVector<qreal>* scale, int id);
+};
+
+class INetworkCommunication : public IHardware
+{
+	Q_OBJECT
+public:
+	/**
+	* something
+	**/
+	//virtual void start() = 0;
+public slots:
+	virtual bool isConnectionEstablished() = 0;
+	virtual void sendMessage(QString msg) = 0;
+
+signals:
+	void showMessage(QString msg);
+};
+
+#define INetworkCommunication_iid "interfaces.lzh.bo.INetworkCommunication/1.0"
+#define IForceSensor_iid "interfaces.lzh.bo.IForceSensor/1.0"
+#define ILiquidLens_iid "interfaces.lzh.bo.ILiquidLens/1.0"
+#define ISerialLightsource_iid "interfaces.lzh.bo.ISerialLightsource/1.0"
 #define IWaveFrontModulator_iid "interfaces.lzh.bo.IWavefrontModulator/1.0"
 #define IShutterController_iid "interfaces.lzh.bo.IShutterController/1.0"
 #define IEnergySensor_iid "interfaces.lzh.bo.IEnergySensor/1.0"
@@ -1641,6 +1871,10 @@ public:
 #define IOGlOutput_iid "interfaces.lzh.bo.IOGlOutput/1.0"
 #define IOGl2DOutput_iid "interfaces.lzh.bo.IOGl2DOutput/1.0"
 
+Q_DECLARE_INTERFACE(INetworkCommunication, INetworkCommunication_iid)
+Q_DECLARE_INTERFACE(IForceSensor, IForceSensor_iid)
+Q_DECLARE_INTERFACE(ILiquidLens, ILiquidLens_iid)
+Q_DECLARE_INTERFACE(ISerialLightsource, ISerialLightsource_iid)
 Q_DECLARE_INTERFACE(IWavefrontModulator, IWaveFrontModulator_iid)
 Q_DECLARE_INTERFACE(IShutterController, IShutterController_iid)
 Q_DECLARE_INTERFACE(IEnergySensor, IEnergySensor_iid)
