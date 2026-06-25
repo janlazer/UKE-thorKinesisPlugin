@@ -18,6 +18,11 @@ constexpr short kErrInvalidArgument = -3;
 constexpr short kErrTimeout = -4;
 constexpr short kErrTargetNotReached = -5;
 constexpr double kPositionToleranceUm = 0.5;
+constexpr int kWaitPollIntervalMs = 50;
+constexpr int kMovingStuckTimeoutMs = 10000;
+constexpr int kMovingStuckSamples = kMovingStuckTimeoutMs / kWaitPollIntervalMs;
+constexpr int kHomeIdleWithoutHomeTimeoutMs = 10000;
+constexpr int kHomeIdleWithoutHomeSamples = kHomeIdleWithoutHomeTimeoutMs / kWaitPollIntervalMs;
 
 bool isValidTriggerMode(int mode)
 {
@@ -671,6 +676,7 @@ bool KVSStage::waitUntilIdle(int32_t targetPos, int timeoutMs, short* errOut)
     const auto t0 = std::chrono::steady_clock::now();
     int32_t lastPos = getPosition(errOut);
     int stableCount = 0;
+    int movingWithoutPositionChangeCount = 0;
     bool seenMoving = false;
 
     while (true)
@@ -682,6 +688,7 @@ bool KVSStage::waitUntilIdle(int32_t targetPos, int timeoutMs, short* errOut)
         if (moving) seenMoving = true;
         if (!moving)
         {
+            movingWithoutPositionChangeCount = 0;
             if (pos == lastPos) stableCount++;
             else stableCount = 0;
 
@@ -713,6 +720,23 @@ bool KVSStage::waitUntilIdle(int32_t targetPos, int timeoutMs, short* errOut)
         else
         {
             stableCount = 0;
+            if (pos == lastPos)
+            {
+                ++movingWithoutPositionChangeCount;
+                if (movingWithoutPositionChangeCount >= kMovingStuckSamples)
+                {
+                    qDebug() << "KVSStage::waitUntilIdle STUCK moving bit set but position unchanged serial=" << m_serialCStr
+                        << "target=" << targetPos
+                        << "lastPos=" << lastPos
+                        << "statusBits=0x" << QString::number(bits, 16);
+                    if (errOut) *errOut = kErrTargetNotReached;
+                    return false;
+                }
+            }
+            else
+            {
+                movingWithoutPositionChangeCount = 0;
+            }
         }
 
         lastPos = pos;
@@ -728,7 +752,7 @@ bool KVSStage::waitUntilIdle(int32_t targetPos, int timeoutMs, short* errOut)
             return false;
         }
 
-        sleepMs(50);
+        sleepMs(kWaitPollIntervalMs);
     }
 }
 
@@ -739,12 +763,18 @@ bool KVSStage::waitUntilHomed(int timeoutMs, short* errOut)
 
     const auto t0 = std::chrono::steady_clock::now();
     int idleWithoutHomeCount = 0;
+    int32_t lastPos = getPosition(errOut);
+    int movingWithoutPositionChangeCount = 0;
+    bool seenMoving = false;
 
     while (true)
     {
         uint32_t bits = (uint32_t)KVS_GetStatusBits(m_serialCStr);
+        int32_t pos = getPosition(errOut);
         const bool homed = isHomedFromStatus(bits);
         const bool moving = isMovingFromStatus(bits);
+        if (moving)
+            seenMoving = true;
 
         if (homed && !moving)
         {
@@ -754,10 +784,18 @@ bool KVSStage::waitUntilHomed(int timeoutMs, short* errOut)
 
         if (!homed && !moving)
         {
-            ++idleWithoutHomeCount;
-            if (idleWithoutHomeCount >= 40)
+            movingWithoutPositionChangeCount = 0;
+            if (pos == lastPos)
+                ++idleWithoutHomeCount;
+            else
+                idleWithoutHomeCount = 0;
+
+            if (idleWithoutHomeCount >= kHomeIdleWithoutHomeSamples)
             {
-                qDebug() << "KVSStage::waitUntilHomed stopped before homing completed serial=" << m_serialCStr;
+                qDebug() << "KVSStage::waitUntilHomed IDLE without homed bit serial=" << m_serialCStr
+                    << "pos=" << pos
+                    << "seenMoving=" << seenMoving
+                    << "statusBits=0x" << QString::number(bits, 16);
                 if (errOut) *errOut = kErrTargetNotReached;
                 return false;
             }
@@ -765,7 +803,32 @@ bool KVSStage::waitUntilHomed(int timeoutMs, short* errOut)
         else
         {
             idleWithoutHomeCount = 0;
+            if (moving)
+            {
+                if (pos == lastPos)
+                {
+                    ++movingWithoutPositionChangeCount;
+                    if (movingWithoutPositionChangeCount >= kMovingStuckSamples)
+                    {
+                        qDebug() << "KVSStage::waitUntilHomed STUCK moving bit set but position unchanged serial=" << m_serialCStr
+                            << "lastPos=" << lastPos
+                            << "statusBits=0x" << QString::number(bits, 16);
+                        if (errOut) *errOut = kErrTargetNotReached;
+                        return false;
+                    }
+                }
+                else
+                {
+                    movingWithoutPositionChangeCount = 0;
+                }
+            }
+            else
+            {
+                movingWithoutPositionChangeCount = 0;
+            }
         }
+
+        lastPos = pos;
 
         const auto now = std::chrono::steady_clock::now();
         const int elapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
@@ -777,6 +840,6 @@ bool KVSStage::waitUntilHomed(int timeoutMs, short* errOut)
             return false;
         }
 
-        sleepMs(50);
+        sleepMs(kWaitPollIntervalMs);
     }
 }
