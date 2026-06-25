@@ -25,14 +25,18 @@
 #include <atomic>
 #include <cstddef>
 
-class thorlabsKinesisPlugin : public IStage
+class thorlabsKinesisPlugin : public IScanStage
 {
     Q_OBJECT
         Q_PLUGIN_METADATA(IID IStage_iid)
+        Q_INTERFACES(IScanStage)
+        Q_INTERFACES(IStageMultiAxis)
         Q_INTERFACES(IStage)
         Q_INTERFACES(IHardware)
 
 public:
+    using IStageMultiAxis::moveSteps;
+
     thorlabsKinesisPlugin();
     ~thorlabsKinesisPlugin();
 
@@ -50,6 +54,7 @@ public:
     // public standard unit: micrometers (µm)
     virtual bool moveTo(double pos, int id = 0) override;
     virtual bool moveTo(double* pos, const char* axes) override;
+    virtual bool moveTo(const double* positions, const int* axes, int axisCount) override;
 
     // Convenience wrapper for compile-time C arrays. Axis codes are bit-style
     // identifiers: 1 = X, 2 = Y, 4 = Z. The shared array size is deduced by
@@ -63,9 +68,16 @@ public:
 
     virtual bool moveSteps(double steps, int id = 0) override;
     bool moveSteps(double* steps, const char* axes);   // Zusatzfunktion fuer mehrere relative Achsen
+    virtual bool moveSteps(const double* steps, const int* axes, int axisCount) override;
     virtual double* getPosition(const char* axes) override;
     virtual double* getPosition() override;
     virtual bool stop() override;
+
+    // scan interface
+    ScanCapabilities getScanCapabilities() const override;
+    ScanValidationResult validateScanJob(const ScanJob& job) const override;
+    bool executeScanJob(const ScanJob& job) override;
+    bool abortScanJob() override;
 
     // legacy methods kept (stubs)
     void setHWSerialNr(QString* serialNr);
@@ -93,6 +105,8 @@ private:
     bool disableAllTriggers();
     bool moveAxesCoordinated(const double* values, const char* axes, bool relative);
     bool moveToAxisCodes(const double* positions, const int* axes, std::size_t count);
+    bool executeScanLine(const LaserLine& line, const ScanJob& job);
+    bool configureLineTrigger(BDCStage* stage, unsigned channel, double startUm, double endUm, const ScanJob& job);
 
     BDCStage* m30xyForBase(const QString& baseSerial);
     KVSStage* kvsForSerial(const QString& serial);

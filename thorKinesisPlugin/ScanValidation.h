@@ -18,7 +18,10 @@ enum class ScanValidationError
     EmptyLayer,
     InvalidCoordinate,
     ZeroLengthLine,
-    PulseCountOverflow
+    PulseCountOverflow,
+    MissingScanAxis,
+    UnsupportedScanGeometry,
+    UnsupportedScanVelocity
 };
 
 struct ScanValidationResult

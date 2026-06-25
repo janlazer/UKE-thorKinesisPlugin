@@ -30,3 +30,16 @@ struct ScanJob
     double triggerSpacingUm = 0.0;
     int32_t pulseWidthUs = 0;
 };
+
+struct ScanCapabilities
+{
+    bool supportsScanJobs = false;
+    bool supportsHardwarePositionTrigger = false;
+    bool supportsHorizontalLines = false;
+    bool supportsVerticalLines = false;
+    bool supportsDiagonalLines = false;
+    bool supportsLayeredZ = false;
+    bool controlsScanVelocity = false;
+
+    double maximumTriggerFrequencyHz = 0.0;
+};

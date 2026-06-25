@@ -14,6 +14,72 @@
 namespace
 {
     constexpr double kMaximumLaserTriggerFrequencyHz = 20.0;
+    constexpr double kScanLineAxisToleranceUm = 1e-6;
+
+    ScanValidationResult scanValidationError(ScanValidationError error,
+        std::size_t layerIndex = 0,
+        std::size_t lineIndex = 0)
+    {
+        ScanValidationResult result;
+        result.error = error;
+        result.layerIndex = layerIndex;
+        result.lineIndex = lineIndex;
+        return result;
+    }
+
+    bool nearlyEqual(double a, double b)
+    {
+        return std::fabs(a - b) <= kScanLineAxisToleranceUm;
+    }
+
+    bool scanJobNeedsZAxis(const ScanJob& job)
+    {
+        if (job.layers.empty())
+            return false;
+
+        const double firstZUm = job.layers.front().zUm;
+        for (const ScanLayer& layer : job.layers)
+        {
+            if (!nearlyEqual(layer.zUm, 0.0) || !nearlyEqual(layer.zUm, firstZUm))
+                return true;
+        }
+
+        return false;
+    }
+
+    bool scanAxisForLine(const LaserLine& line, QChar& axisName)
+    {
+        const bool horizontal = nearlyEqual(line.start.yUm, line.end.yUm)
+            && !nearlyEqual(line.start.xUm, line.end.xUm);
+        const bool vertical = nearlyEqual(line.start.xUm, line.end.xUm)
+            && !nearlyEqual(line.start.yUm, line.end.yUm);
+
+        if (horizontal)
+        {
+            axisName = QChar('x');
+            return true;
+        }
+
+        if (vertical)
+        {
+            axisName = QChar('y');
+            return true;
+        }
+
+        return false;
+    }
+
+    int32_t pulseCountForLine(double startUm, double endUm, double triggerSpacingUm)
+    {
+        const double lengthUm = std::fabs(endUm - startUm);
+        const double pulseCount = std::floor(lengthUm / triggerSpacingUm) + 1.0;
+        if (!std::isfinite(pulseCount)
+            || pulseCount < 1.0
+            || pulseCount > static_cast<double>((std::numeric_limits<int32_t>::max)()))
+            return 0;
+
+        return static_cast<int32_t>(pulseCount);
+    }
 }
 
 static bool parseI32(const QString& s, int32_t& value)
@@ -498,6 +564,13 @@ bool thorlabsKinesisPlugin::moveTo(double* pos, const char* axes)
     return moveAxesCoordinated(pos, axes, false);
 }
 
+bool thorlabsKinesisPlugin::moveTo(const double* positions, const int* axes, int axisCount)
+{
+    if (axisCount < 1)
+        return false;
+    return moveToAxisCodes(positions, axes, static_cast<std::size_t>(axisCount));
+}
+
 bool thorlabsKinesisPlugin::moveToAxisCodes(const double* positions, const int* axes, std::size_t count)
 {
     if (!positions || !axes || count == 0)
@@ -523,6 +596,232 @@ bool thorlabsKinesisPlugin::moveToAxisCodes(const double* positions, const int* 
     }
 
     return moveAxesCoordinated(positions, axisNames.c_str(), false);
+}
+
+ScanCapabilities thorlabsKinesisPlugin::getScanCapabilities() const
+{
+    ScanCapabilities capabilities;
+    capabilities.supportsScanJobs = true;
+    capabilities.supportsHardwarePositionTrigger = true;
+    capabilities.supportsHorizontalLines = true;
+    capabilities.supportsVerticalLines = true;
+    capabilities.supportsDiagonalLines = false;
+    capabilities.supportsLayeredZ = findAxisIndexByName(QChar('z')) >= 0;
+    capabilities.controlsScanVelocity = false;
+    capabilities.maximumTriggerFrequencyHz = kMaximumLaserTriggerFrequencyHz;
+    return capabilities;
+}
+
+ScanValidationResult thorlabsKinesisPlugin::validateScanJob(const ScanJob& job) const
+{
+    const ScanValidationResult generic = ::validateScanJob(job, kMaximumLaserTriggerFrequencyHz);
+    if (!generic.isValid())
+        return generic;
+
+    const int xAxisIndex = findAxisIndexByName(QChar('x'));
+    const int yAxisIndex = findAxisIndexByName(QChar('y'));
+    if (xAxisIndex < 0 || yAxisIndex < 0)
+        return scanValidationError(ScanValidationError::MissingScanAxis);
+
+    const AxisEntry& xAxis = m_axes[xAxisIndex];
+    const AxisEntry& yAxis = m_axes[yAxisIndex];
+    if (!xAxis.isM30xy || !yAxis.isM30xy || xAxis.baseSerial != yAxis.baseSerial)
+        return scanValidationError(ScanValidationError::MissingScanAxis);
+
+    if (scanJobNeedsZAxis(job) && findAxisIndexByName(QChar('z')) < 0)
+        return scanValidationError(ScanValidationError::MissingScanAxis);
+
+    for (std::size_t layerIndex = 0; layerIndex < job.layers.size(); ++layerIndex)
+    {
+        const ScanLayer& layer = job.layers[layerIndex];
+        for (std::size_t lineIndex = 0; lineIndex < layer.lines.size(); ++lineIndex)
+        {
+            QChar scanAxis;
+            if (!scanAxisForLine(layer.lines[lineIndex], scanAxis))
+                return scanValidationError(ScanValidationError::UnsupportedScanGeometry, layerIndex, lineIndex);
+        }
+    }
+
+    return ScanValidationResult{};
+}
+
+bool thorlabsKinesisPlugin::configureLineTrigger(BDCStage* stage, unsigned channel,
+    double startUm, double endUm, const ScanJob& job)
+{
+    if (!stage || !stage->isOpen() || channel < 1 || channel > 2)
+        return false;
+
+    short err = 0;
+    const int32_t startDev = stage->umToDevice(startUm, channel, &err);
+    if (err != 0)
+        return false;
+
+    const int32_t intervalDev = stage->umToDevice(job.triggerSpacingUm, channel, &err);
+    if (err != 0 || intervalDev <= 0)
+        return false;
+
+    const int32_t pulseCount = pulseCountForLine(startUm, endUm, job.triggerSpacingUm);
+    if (pulseCount <= 0)
+        return false;
+
+    const double currentVelocityMmS = stage->getMaxVelocityMmS(channel, &err);
+    if (err != 0 || !std::isfinite(currentVelocityMmS) || currentVelocityMmS <= 0.0)
+        return false;
+
+    const double triggerFrequencyHz = currentVelocityMmS / (job.triggerSpacingUm / 1000.0);
+    if (!std::isfinite(triggerFrequencyHz)
+        || triggerFrequencyHz > kMaximumLaserTriggerFrequencyHz + 1e-9)
+        return false;
+
+    const double triggerPeriodUs = 1000000.0 / triggerFrequencyHz;
+    if (static_cast<double>(job.pulseWidthUs) > triggerPeriodUs + 1e-9)
+        return false;
+
+    const bool forward = endUm >= startUm;
+
+    BDCTriggerConfig cfg;
+    cfg.enabled = true;
+    cfg.trigger1Mode = static_cast<int>(forward
+        ? BDCTriggerMode::PositionStepForward
+        : BDCTriggerMode::PositionStepReverse);
+    cfg.trigger1Polarity = static_cast<int>(BDCTriggerPolarity::High);
+    cfg.trigger2Mode = static_cast<int>(BDCTriggerMode::Disabled);
+    cfg.trigger2Polarity = static_cast<int>(BDCTriggerPolarity::High);
+    cfg.startPosFwd = startDev;
+    cfg.intervalFwd = intervalDev;
+    cfg.pulseCountFwd = pulseCount;
+    cfg.startPosRev = startDev;
+    cfg.intervalRev = intervalDev;
+    cfg.pulseCountRev = pulseCount;
+    cfg.pulseWidthUs = job.pulseWidthUs;
+    cfg.cycleCount = 1;
+
+    stage->setTriggerConfig(cfg);
+    return stage->applyTriggerConfig(channel, &err);
+}
+
+bool thorlabsKinesisPlugin::executeScanLine(const LaserLine& line, const ScanJob& job)
+{
+    QChar scanAxisName;
+    if (!scanAxisForLine(line, scanAxisName))
+        return false;
+
+    const int scanAxisIndex = findAxisIndexByName(scanAxisName);
+    if (scanAxisIndex < 0)
+        return false;
+
+    const AxisEntry& scanAxis = m_axes[scanAxisIndex];
+    if (!scanAxis.isM30xy)
+        return false;
+
+    BDCStage* stage = m30xyForBase(scanAxis.baseSerial);
+    if (!stage || !stage->isOpen())
+        return false;
+
+    const unsigned channel = static_cast<unsigned>(scanAxis.channel);
+    const double startUm = scanAxisName == QChar('x') ? line.start.xUm : line.start.yUm;
+    const double endUm = scanAxisName == QChar('x') ? line.end.xUm : line.end.yUm;
+
+    short err = 0;
+    const int32_t targetDev = stage->umToDevice(endUm, channel, &err);
+    if (err != 0)
+        return false;
+
+    if (!configureLineTrigger(stage, channel, startUm, endUm, job))
+        return false;
+
+    if (m_stopRequested.load())
+    {
+        stage->disableTrigger(channel, &err);
+        return false;
+    }
+
+    if (!stage->beginMoveTo(targetDev, channel, &err))
+    {
+        stage->disableTrigger(channel, &err);
+        return false;
+    }
+
+    const bool reached = stage->waitForPosition(targetDev, channel, 120000, &err);
+    const bool disabled = stage->disableTrigger(channel, &err);
+    return reached && disabled && !m_stopRequested.load();
+}
+
+bool thorlabsKinesisPlugin::executeScanJob(const ScanJob& job)
+{
+    if (!isInitialized())
+        return false;
+
+    bool expectedInactive = false;
+    if (!m_motionTaskActive.compare_exchange_strong(expectedInactive, true))
+        return false;
+
+    struct ScanMotionGuard
+    {
+        thorlabsKinesisPlugin* plugin = nullptr;
+        ~ScanMotionGuard()
+        {
+            if (!plugin)
+                return;
+            plugin->disableAllTriggers();
+            plugin->m_motionTaskActive.store(false);
+            plugin->m_stopRequested.store(false);
+        }
+    } guard{ this };
+
+    m_stopRequested.store(false);
+
+    const ScanValidationResult validation = validateScanJob(job);
+    if (!validation.isValid())
+    {
+        qDebug() << className << "::executeScanJob validation failed"
+            << static_cast<int>(validation.error)
+            << "layer" << static_cast<int>(validation.layerIndex)
+            << "line" << static_cast<int>(validation.lineIndex);
+        return false;
+    }
+
+    if (!isStopped())
+        return false;
+
+    const bool useZ = scanJobNeedsZAxis(job);
+
+    for (const ScanLayer& layer : job.layers)
+    {
+        for (const LaserLine& line : layer.lines)
+        {
+            if (m_stopRequested.load())
+                return false;
+
+            std::array<double, 3> startPositions = {
+                line.start.xUm,
+                line.start.yUm,
+                layer.zUm
+            };
+            char axes[4] = { 'x', 'y', '\0', '\0' };
+            if (useZ)
+            {
+                axes[2] = 'z';
+                axes[3] = '\0';
+            }
+
+            if (!moveAxesCoordinated(startPositions.data(), axes, false))
+                return false;
+
+            if (m_stopRequested.load())
+                return false;
+
+            if (!executeScanLine(line, job))
+                return false;
+        }
+    }
+
+    return true;
+}
+
+bool thorlabsKinesisPlugin::abortScanJob()
+{
+    return stop();
 }
 
 bool thorlabsKinesisPlugin::moveAxesCoordinated(const double* values, const char* axes, bool relative)
@@ -710,6 +1009,33 @@ bool thorlabsKinesisPlugin::moveSteps(double steps, int id)
 bool thorlabsKinesisPlugin::moveSteps(double* steps, const char* axes)
 {
     return moveAxesCoordinated(steps, axes, true);
+}
+
+bool thorlabsKinesisPlugin::moveSteps(const double* steps, const int* axes, int axisCount)
+{
+    if (!steps || !axes || axisCount < 1)
+        return false;
+
+    std::string axisNames;
+    axisNames.reserve(static_cast<std::size_t>(axisCount));
+
+    for (int i = 0; i < axisCount; ++i) {
+        switch (axes[i]) {
+        case 1:
+            axisNames.push_back('x');
+            break;
+        case 2:
+            axisNames.push_back('y');
+            break;
+        case 4:
+            axisNames.push_back('z');
+            break;
+        default:
+            return false;
+        }
+    }
+
+    return moveAxesCoordinated(steps, axisNames.c_str(), true);
 }
 
 double* thorlabsKinesisPlugin::getPosition(const char* axes)

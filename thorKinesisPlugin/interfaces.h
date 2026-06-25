@@ -41,7 +41,9 @@
 #include <QtPlugin>
 #include <QMdiSubWindow>
 #include <QMap>
+#include <cstddef>
 #include "qwt_plot_curve.h"
+#include "ScanValidation.h"
 
 class QDockWidget;
 
@@ -950,6 +952,49 @@ public:
 signals:
 	void newPositionAvailable(QVector<qreal>* position, int id);
 };
+//! IStageMultiAxis
+/*! Optional extension for stage implementations that support safe multi-axis
+	movement calls. Unlike IStage::moveTo(double*, const char*), these methods
+	include the number of values explicitly and can be used through compile-time
+	array wrappers without losing the array length.
+*/
+
+class IStageMultiAxis : public IStage
+{
+	Q_OBJECT
+public:
+	virtual bool moveTo(const double* positions, const int* axes, int axisCount) = 0;
+	virtual bool moveSteps(const double* steps, const int* axes, int axisCount) = 0;
+
+	template<std::size_t AxisCount>
+	bool moveTo(const double (&positions)[AxisCount], const int (&axes)[AxisCount])
+	{
+		static_assert(AxisCount > 0, "At least one axis is required.");
+		return moveTo(positions, axes, static_cast<int>(AxisCount));
+	}
+
+	template<std::size_t AxisCount>
+	bool moveSteps(const double (&steps)[AxisCount], const int (&axes)[AxisCount])
+	{
+		static_assert(AxisCount > 0, "At least one axis is required.");
+		return moveSteps(steps, axes, static_cast<int>(AxisCount));
+	}
+};
+//! IScanStage
+/*! Optional scan-capable stage interface. A plugin that implements this interface
+    is still a normal IStage, but can additionally validate and execute complete
+    scan jobs with laser-trigger semantics.
+*/
+
+class IScanStage : public IStageMultiAxis
+{
+	Q_OBJECT
+public:
+	virtual ScanCapabilities getScanCapabilities() const = 0;
+	virtual ScanValidationResult validateScanJob(const ScanJob& job) const = 0;
+	virtual bool executeScanJob(const ScanJob& job) = 0;
+	virtual bool abortScanJob() = 0;
+};
 
 //! ISystem
 /*! ISystem interface for system implementations
@@ -1196,7 +1241,7 @@ public:
 		int triggerSource;
 		int	lineWidth;
 		int	lineStart;
-		int linesPerFrame; //mz: nur aus legacy gründen. kann gelöscht werden sobald alle plugins/jobs nicht mehr auf linesPerFrame zugreifen, sondern auf frameWidth
+		int linesPerFrame; //mz: nur aus legacy grÃ¼nden. kann gelÃ¶scht werden sobald alle plugins/jobs nicht mehr auf linesPerFrame zugreifen, sondern auf frameWidth
 		int frameWidth;
 		int frameFrequency;
 		int gain;
@@ -1865,6 +1910,8 @@ signals:
 #define ICamera_iid	"interfaces.lzh.bo.ICamera/1.0"
 #define IHardware_iid "interfaces.lzh.bo.IHardware/1.0"
 #define IStage_iid "interfaces.lzh.bo.IStage/1.0"
+#define IStageMultiAxis_iid "interfaces.lzh.bo.IStageMultiAxis/1.0"
+#define IScanStage_iid "interfaces.lzh.bo.IScanStage/1.0"
 #define ISystem_iid	"interfaces.lzh.bo.ISystem/1.0"
 #define IOutput_iid	"interfaces.lzh.bo.IOutput/1.0"
 #define IQwtOutput_iid "interfaces.lzh.bo.IQwtOutput/1.0"
@@ -1884,6 +1931,8 @@ Q_DECLARE_INTERFACE(ISpectrometer, ISpectrometer_iid)
 Q_DECLARE_INTERFACE(ICamera, ICamera_iid)
 Q_DECLARE_INTERFACE(IHardware, IHardware_iid)
 Q_DECLARE_INTERFACE(IStage, IStage_iid)
+Q_DECLARE_INTERFACE(IStageMultiAxis, IStageMultiAxis_iid)
+Q_DECLARE_INTERFACE(IScanStage, IScanStage_iid)
 Q_DECLARE_INTERFACE(ISystem, ISystem_iid)
 Q_DECLARE_INTERFACE(IOutput, IOutput_iid)
 Q_DECLARE_INTERFACE(IQwtOutput, IQwtOutput_iid)
