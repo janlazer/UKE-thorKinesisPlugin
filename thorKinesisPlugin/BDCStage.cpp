@@ -546,13 +546,15 @@ bool BDCStage::stopImmediate(unsigned channel, short* errOut)
     if (!validateReady(channel, errOut))
         return false;
 
-    short triggerErr = 0;
-    const bool triggerDisabled = disableTrigger(channel, &triggerErr);
-
     short err = BDC_StopImmediate(m_serialCStr, (short)channel);
     const bool stopped = okOrLog("BDC_StopImmediate", m_serial, err, channel, errOut);
+    if (!stopped)
+        return false;
+
+    short triggerErr = 0;
+    const bool triggerDisabled = !isTriggerEnabled(channel) || disableTrigger(channel, &triggerErr);
     if (!triggerDisabled && errOut) *errOut = triggerErr;
-    return triggerDisabled && stopped;
+    return triggerDisabled;
 }
 
 int32_t BDCStage::getPosition(unsigned channel, short* errOut) const
@@ -691,6 +693,12 @@ const BDCTriggerConfig& BDCStage::triggerConfig() const
     return m_trig;
 }
 
+bool BDCStage::isTriggerEnabled(unsigned channel) const
+{
+    const int idx = channelIndex(channel);
+    return idx >= 0 && m_triggerEnabled[idx];
+}
+
 bool BDCStage::applyTriggerConfig(unsigned channel, short* errOut)
 {
     if (!validateReady(channel, errOut))
@@ -712,7 +720,7 @@ bool BDCStage::applyTriggerConfig(unsigned channel, short* errOut)
         << "pulseWidthUs=" << m_trig.pulseWidthUs;
 
     if (!requested.enabled)
-        return disableTrigger(channel, errOut);
+        return disableTrigger(channel, true, errOut);
 
     if (!isValidTriggerMode(requested.trigger1Mode)
         || !isValidTriggerMode(requested.trigger2Mode)
@@ -763,7 +771,7 @@ bool BDCStage::applyTriggerConfig(unsigned channel, short* errOut)
 
     // Keep both outputs disabled until all positional parameters have been
     // accepted. This prevents stale parameters from becoming active.
-    if (!disableTrigger(channel, errOut))
+    if (!disableTrigger(channel, true, errOut))
         return false;
 
     short err = BDC_SetTriggerParamsBlock(m_serialCStr, (short)channel, &params);
@@ -774,33 +782,61 @@ bool BDCStage::applyTriggerConfig(unsigned channel, short* errOut)
     if (!okOrLog("BDC_SetTriggerConfigParamsBlock", m_serial, err, channel, errOut))
     {
         short ignored = 0;
-        disableTrigger(channel, &ignored);
+        disableTrigger(channel, true, &ignored);
         return false;
     }
 
     m_trig = requested;
+    m_triggerEnabled[channelIndex(channel)] = true;
     if (errOut) *errOut = 0;
     return true;
 }
 
 bool BDCStage::disableTrigger(unsigned channel, short* errOut)
 {
+    return disableTrigger(channel, false, errOut);
+}
+
+bool BDCStage::disableTrigger(unsigned channel, bool force, short* errOut)
+{
     qDebug() << "BDCStage::disableTrigger serial=" << m_serialCStr << "ch=" << channel;
 
     if (!validateReady(channel, errOut))
         return false;
 
-    KMOT_TriggerConfig cfg = {};
-    cfg.Trigger1Mode = KMOT_TrigDisabled;
-    cfg.Trigger1Polarity = KMOT_TrigPolarityHigh;
-    cfg.Trigger2Mode = KMOT_TrigDisabled;
-    cfg.Trigger2Polarity = KMOT_TrigPolarityHigh;
+    if (!force && !isTriggerEnabled(channel))
+    {
+        qDebug() << "BDCStage::disableTrigger skip serial=" << m_serialCStr
+            << "ch=" << channel
+            << "reason=not-enabled";
+        if (errOut) *errOut = 0;
+        return true;
+    }
 
-    short err = BDC_SetTriggerConfigParamsBlock(m_serialCStr, (short)channel, &cfg);
-    if (!okOrLog("BDC_SetTriggerConfigParamsBlock", m_serial, err, channel, errOut))
+    qDebug() << "BDCStage::disableTrigger calling BDC_SetTriggerConfigParams serial="
+        << m_serialCStr
+        << "ch=" << channel
+        << "force=" << force
+        << "knownEnabled=" << isTriggerEnabled(channel);
+
+    short err = BDC_SetTriggerConfigParams(
+        m_serialCStr,
+        (short)channel,
+        KMOT_TrigDisabled,
+        KMOT_TrigPolarityHigh,
+        KMOT_TrigDisabled,
+        KMOT_TrigPolarityHigh);
+
+    qDebug() << "BDCStage::disableTrigger returned BDC_SetTriggerConfigParams serial="
+        << m_serialCStr
+        << "ch=" << channel
+        << "err=" << err;
+
+    if (!okOrLog("BDC_SetTriggerConfigParams", m_serial, err, channel, errOut))
         return false;
 
-    m_trig.enabled = false;
+    m_triggerEnabled[channelIndex(channel)] = false;
+    m_trig.enabled = m_triggerEnabled[0] || m_triggerEnabled[1];
     if (errOut) *errOut = 0;
     return true;
 }

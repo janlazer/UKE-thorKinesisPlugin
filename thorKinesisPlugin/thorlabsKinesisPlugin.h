@@ -25,6 +25,11 @@
 #include <atomic>
 #include <cstddef>
 
+class QFrame;
+class QLabel;
+class QLineEdit;
+class QPushButton;
+
 class thorlabsKinesisPlugin : public IScanStage
 {
     Q_OBJECT
@@ -96,13 +101,40 @@ private:
         QString display;
     };
 
+    struct AxisUi
+    {
+        QFrame* frame = nullptr;
+        QLabel* title = nullptr;
+        QLabel* serial = nullptr;
+        QLabel* positionValue = nullptr;
+        QLineEdit* positionEdit = nullptr;
+        QLineEdit* stepEdit = nullptr;
+        QLineEdit* triggerStartEdit = nullptr;
+        QLineEdit* triggerIntervalEdit = nullptr;
+        QLineEdit* triggerCountEdit = nullptr;
+        QLineEdit* triggerWidthEdit = nullptr;
+        QPushButton* homeButton = nullptr;
+        QPushButton* moveButton = nullptr;
+        QPushButton* stepDownButton = nullptr;
+        QPushButton* stepUpButton = nullptr;
+        QPushButton* getPositionButton = nullptr;
+        QPushButton* applyTriggerButton = nullptr;
+        QPushButton* disableTriggerButton = nullptr;
+    };
+
     void initGUI();
     void refreshAxisUi();
+    void rebuildAxisFrames();
+    void clearAxisFrames();
+    void selectAxis(int id);
+    void refreshAxisPositionUi(int id);
+    void syncLegacyMotionInputsFromAxisUi(int id);
+    void syncLegacyTriggerInputsFromAxisUi(int id);
     void setMotionUiBusy(bool busy);
     void startMotionTask(const QString& operation, std::function<bool()> task);
     void waitForMotionToFinish();
     void closeDevices();
-    bool disableAllTriggers();
+    bool disableAllTriggers(bool force = false);
     bool moveAxesCoordinated(const double* values, const char* axes, bool relative);
     bool moveToAxisCodes(const double* positions, const int* axes, std::size_t count);
     bool executeScanLine(const LaserLine& line, const ScanJob& job);
@@ -125,6 +157,7 @@ private:
     QString xmlName;
 
     QVector<AxisEntry> m_axes;
+    QVector<AxisUi> m_axisUi;
 
     std::unordered_map<std::string, std::unique_ptr<BDCStage>> m_m30xy;
     std::unordered_map<std::string, std::unique_ptr<KVSStage>> m_kvs;

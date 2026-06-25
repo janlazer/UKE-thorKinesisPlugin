@@ -83,6 +83,8 @@ public:
 
     bool applyTriggerConfig(unsigned channel, short* errOut = nullptr);
     bool disableTrigger(unsigned channel, short* errOut = nullptr);
+    bool disableTrigger(unsigned channel, bool force, short* errOut = nullptr);
+    bool isTriggerEnabled(unsigned channel) const;
 
     const std::string& serial() const { return m_serial; }
     bool isOpen() const { return m_isOpen; }
@@ -107,6 +109,7 @@ private:
     const char* m_serialCStr = nullptr;
     bool m_isOpen = false;
     BDCTriggerConfig m_trig;
+    bool m_triggerEnabled[2] = { false, false };
 
     // Internal scaling: real units assumed mm for linear stages
     double factor_position_mm[2] = { 1.0, 1.0 };       // mm / device unit

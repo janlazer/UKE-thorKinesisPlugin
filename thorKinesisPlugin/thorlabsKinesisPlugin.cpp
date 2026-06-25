@@ -6,9 +6,20 @@
 
 #include "thorlabsKinesisPlugin.h"
 
+#include <QFont>
+#include <QFrame>
+#include <QGridLayout>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QPushButton>
+#include <QSignalBlocker>
+#include <QSizePolicy>
+#include <QSpacerItem>
 #include <QTimer>
+#include <QVBoxLayout>
 #include <array>
 
 namespace
@@ -209,6 +220,22 @@ void thorlabsKinesisPlugin::setMotionUiBusy(bool busy)
     ui.pushButton_applyTrigger->setEnabled(!busy);
     ui.pushButton_disableTrigger->setEnabled(!busy);
     ui.pushButton_stop->setEnabled(busy || isInitialized());
+
+    const bool axisControlsEnabled = !busy && isInitialized();
+    for (int id = 0; id < m_axisUi.size(); ++id)
+    {
+        AxisUi& axisUi = m_axisUi[id];
+        const bool triggerControlsEnabled =
+            axisControlsEnabled && id >= 0 && id < m_axes.size() && m_axes[id].isM30xy;
+
+        if (axisUi.homeButton) axisUi.homeButton->setEnabled(axisControlsEnabled);
+        if (axisUi.moveButton) axisUi.moveButton->setEnabled(axisControlsEnabled);
+        if (axisUi.stepDownButton) axisUi.stepDownButton->setEnabled(axisControlsEnabled);
+        if (axisUi.stepUpButton) axisUi.stepUpButton->setEnabled(axisControlsEnabled);
+        if (axisUi.getPositionButton) axisUi.getPositionButton->setEnabled(axisControlsEnabled);
+        if (axisUi.applyTriggerButton) axisUi.applyTriggerButton->setEnabled(triggerControlsEnabled);
+        if (axisUi.disableTriggerButton) axisUi.disableTriggerButton->setEnabled(triggerControlsEnabled);
+    }
 }
 
 void thorlabsKinesisPlugin::startMotionTask(const QString& operation, std::function<bool()> task)
@@ -249,6 +276,8 @@ void thorlabsKinesisPlugin::startMotionTask(const QString& operation, std::funct
             m_motionThread = nullptr;
             m_motionTaskActive.store(false);
             setMotionUiBusy(false);
+            for (int id = 0; id < m_axisUi.size(); ++id)
+                refreshAxisPositionUi(id);
         }
         thread->deleteLater();
     });
@@ -277,7 +306,7 @@ void thorlabsKinesisPlugin::closeDevices()
     m_kvs.clear();
 }
 
-bool thorlabsKinesisPlugin::disableAllTriggers()
+bool thorlabsKinesisPlugin::disableAllTriggers(bool force)
 {
     std::lock_guard<std::mutex> lock(m_deviceMapMutex);
     bool ok = true;
@@ -289,8 +318,8 @@ bool thorlabsKinesisPlugin::disableAllTriggers()
             continue;
 
         short err = 0;
-        if (!stage->disableTrigger(1, &err)) ok = false;
-        if (!stage->disableTrigger(2, &err)) ok = false;
+        if (!stage->disableTrigger(1, force, &err)) ok = false;
+        if (!stage->disableTrigger(2, force, &err)) ok = false;
     }
 
     for (auto& entry : m_kvs)
@@ -300,10 +329,232 @@ bool thorlabsKinesisPlugin::disableAllTriggers()
             continue;
 
         short err = 0;
-        if (!stage->disableTrigger(&err)) ok = false;
+        if ((force || stage->triggerConfig().enabled) && !stage->disableTrigger(&err)) ok = false;
     }
 
     return ok;
+}
+
+void thorlabsKinesisPlugin::clearAxisFrames()
+{
+    while (QLayoutItem* item = ui.axisFramesLayout->takeAt(0))
+    {
+        if (QWidget* widget = item->widget())
+            delete widget;
+        delete item;
+    }
+
+    m_axisUi.clear();
+}
+
+void thorlabsKinesisPlugin::selectAxis(int id)
+{
+    if (id < 0 || id >= m_axes.size())
+        return;
+
+    QSignalBlocker blocker(ui.comboBox_devices);
+    ui.comboBox_devices->setCurrentIndex(id);
+    refreshAxisUi();
+}
+
+void thorlabsKinesisPlugin::syncLegacyMotionInputsFromAxisUi(int id)
+{
+    if (id < 0 || id >= m_axisUi.size())
+        return;
+
+    const AxisUi& axisUi = m_axisUi[id];
+    if (axisUi.positionEdit)
+        ui.lineEdit_position->setText(axisUi.positionEdit->text());
+    if (axisUi.stepEdit)
+        ui.lineEdit_step->setText(axisUi.stepEdit->text());
+}
+
+void thorlabsKinesisPlugin::syncLegacyTriggerInputsFromAxisUi(int id)
+{
+    if (id < 0 || id >= m_axisUi.size())
+        return;
+
+    const AxisUi& axisUi = m_axisUi[id];
+    if (axisUi.triggerStartEdit)
+        ui.lineEdit_trigStart->setText(axisUi.triggerStartEdit->text());
+    if (axisUi.triggerIntervalEdit)
+        ui.lineEdit_trigInterval->setText(axisUi.triggerIntervalEdit->text());
+    if (axisUi.triggerCountEdit)
+        ui.lineEdit_trigCount->setText(axisUi.triggerCountEdit->text());
+    if (axisUi.triggerWidthEdit)
+        ui.lineEdit_trigWidth->setText(axisUi.triggerWidthEdit->text());
+}
+
+void thorlabsKinesisPlugin::refreshAxisPositionUi(int id)
+{
+    if (id < 0 || id >= m_axisUi.size())
+        return;
+
+    double positionUm = 0.0;
+    const QString text = readAxisPositionUm(id, positionUm)
+        ? QString::number(positionUm, 'f', 3) + " um"
+        : QStringLiteral("n/a");
+
+    if (m_axisUi[id].positionValue)
+        m_axisUi[id].positionValue->setText(text);
+
+    if (ui.comboBox_devices->currentIndex() == id)
+        ui.label_positionValue->setText(text);
+}
+
+void thorlabsKinesisPlugin::rebuildAxisFrames()
+{
+    clearAxisFrames();
+
+    if (m_axes.isEmpty())
+    {
+        auto* emptyLabel = new QLabel("Keine Achsen erkannt. Bitte Refresh / Detect ausfuehren.",
+            ui.scrollAreaWidgetContents_axes);
+        emptyLabel->setAlignment(Qt::AlignCenter);
+        emptyLabel->setWordWrap(true);
+        emptyLabel->setMinimumHeight(80);
+        ui.axisFramesLayout->addWidget(emptyLabel);
+        ui.axisFramesLayout->addStretch(1);
+        return;
+    }
+
+    m_axisUi.resize(m_axes.size());
+
+    for (int id = 0; id < m_axes.size(); ++id)
+    {
+        const AxisEntry& ax = m_axes[id];
+        AxisUi axisUi;
+
+        auto* frame = new QFrame(ui.scrollAreaWidgetContents_axes);
+        frame->setObjectName(QString("axisFrame_%1").arg(id));
+        frame->setFrameShape(QFrame::StyledPanel);
+        frame->setFrameShadow(QFrame::Raised);
+        frame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+
+        auto* frameLayout = new QVBoxLayout(frame);
+        frameLayout->setContentsMargins(10, 10, 10, 10);
+        frameLayout->setSpacing(8);
+
+        axisUi.title = new QLabel(ax.display, frame);
+        QFont titleFont = axisUi.title->font();
+        titleFont.setBold(true);
+        axisUi.title->setFont(titleFont);
+        frameLayout->addWidget(axisUi.title);
+
+        auto* grid = new QGridLayout();
+        grid->setColumnStretch(1, 1);
+        grid->setColumnStretch(3, 1);
+
+        axisUi.serial = new QLabel(ax.baseSerial, frame);
+        axisUi.positionEdit = new QLineEdit("0", frame);
+        axisUi.stepEdit = new QLineEdit("100", frame);
+        axisUi.positionValue = new QLabel("n/a", frame);
+        axisUi.positionValue->setMinimumWidth(90);
+
+        axisUi.homeButton = new QPushButton("Home", frame);
+        axisUi.moveButton = new QPushButton("Move", frame);
+        axisUi.stepDownButton = new QPushButton("Step-", frame);
+        axisUi.stepUpButton = new QPushButton("Step+", frame);
+        axisUi.getPositionButton = new QPushButton("Read", frame);
+
+        grid->addWidget(new QLabel("Serial:", frame), 0, 0);
+        grid->addWidget(axisUi.serial, 0, 1, 1, 3);
+
+        grid->addWidget(new QLabel("Target [um]:", frame), 1, 0);
+        grid->addWidget(axisUi.positionEdit, 1, 1);
+        grid->addWidget(axisUi.moveButton, 1, 2);
+        grid->addWidget(axisUi.homeButton, 1, 3);
+
+        grid->addWidget(new QLabel("Step [um]:", frame), 2, 0);
+        grid->addWidget(axisUi.stepEdit, 2, 1);
+        auto* stepButtons = new QWidget(frame);
+        auto* stepButtonsLayout = new QHBoxLayout(stepButtons);
+        stepButtonsLayout->setContentsMargins(0, 0, 0, 0);
+        stepButtonsLayout->setSpacing(4);
+        stepButtonsLayout->addWidget(axisUi.stepDownButton);
+        stepButtonsLayout->addWidget(axisUi.stepUpButton);
+        grid->addWidget(stepButtons, 2, 2, 1, 2);
+
+        grid->addWidget(new QLabel("Current:", frame), 3, 0);
+        grid->addWidget(axisUi.positionValue, 3, 1);
+        grid->addWidget(axisUi.getPositionButton, 3, 2, 1, 2);
+
+        if (ax.isM30xy)
+        {
+            axisUi.triggerStartEdit = new QLineEdit("0", frame);
+            axisUi.triggerIntervalEdit = new QLineEdit("0", frame);
+            axisUi.triggerCountEdit = new QLineEdit("1", frame);
+            axisUi.triggerWidthEdit = new QLineEdit("50000", frame);
+            axisUi.applyTriggerButton = new QPushButton("Apply Trigger", frame);
+            axisUi.disableTriggerButton = new QPushButton("Disable Trigger", frame);
+
+            grid->addWidget(new QLabel("Trigger start [um]:", frame), 4, 0);
+            grid->addWidget(axisUi.triggerStartEdit, 4, 1);
+            grid->addWidget(new QLabel("Spacing [um]:", frame), 4, 2);
+            grid->addWidget(axisUi.triggerIntervalEdit, 4, 3);
+
+            grid->addWidget(new QLabel("Pulse count:", frame), 5, 0);
+            grid->addWidget(axisUi.triggerCountEdit, 5, 1);
+            grid->addWidget(new QLabel("Pulse width [us]:", frame), 5, 2);
+            grid->addWidget(axisUi.triggerWidthEdit, 5, 3);
+
+            grid->addWidget(axisUi.applyTriggerButton, 6, 0, 1, 2);
+            grid->addWidget(axisUi.disableTriggerButton, 6, 2, 1, 2);
+        }
+
+        frameLayout->addLayout(grid);
+        ui.axisFramesLayout->addWidget(frame);
+
+        axisUi.frame = frame;
+        m_axisUi[id] = axisUi;
+
+        connect(axisUi.homeButton, &QPushButton::clicked, this, [this, id]() {
+            selectAxis(id);
+            slot_goHome();
+        });
+        connect(axisUi.moveButton, &QPushButton::clicked, this, [this, id]() {
+            selectAxis(id);
+            syncLegacyMotionInputsFromAxisUi(id);
+            slot_moveTo();
+        });
+        connect(axisUi.positionEdit, &QLineEdit::returnPressed,
+            axisUi.moveButton, &QPushButton::click);
+        connect(axisUi.stepDownButton, &QPushButton::clicked, this, [this, id]() {
+            selectAxis(id);
+            syncLegacyMotionInputsFromAxisUi(id);
+            slot_moveStepBackward();
+        });
+        connect(axisUi.stepUpButton, &QPushButton::clicked, this, [this, id]() {
+            selectAxis(id);
+            syncLegacyMotionInputsFromAxisUi(id);
+            slot_moveStepForward();
+        });
+        connect(axisUi.getPositionButton, &QPushButton::clicked, this, [this, id]() {
+            selectAxis(id);
+            slot_getPosition();
+            refreshAxisPositionUi(id);
+        });
+
+        if (axisUi.applyTriggerButton)
+        {
+            connect(axisUi.applyTriggerButton, &QPushButton::clicked, this, [this, id]() {
+                selectAxis(id);
+                syncLegacyTriggerInputsFromAxisUi(id);
+                slot_applyTrigger();
+            });
+        }
+
+        if (axisUi.disableTriggerButton)
+        {
+            connect(axisUi.disableTriggerButton, &QPushButton::clicked, this, [this, id]() {
+                selectAxis(id);
+                slot_disableTrigger();
+            });
+        }
+    }
+
+    ui.axisFramesLayout->addStretch(1);
+    setMotionUiBusy(m_motionTaskActive.load());
 }
 
 void thorlabsKinesisPlugin::refreshAxisUi()
@@ -436,6 +687,7 @@ bool thorlabsKinesisPlugin::detect()
         ui.comboBox_devices->addItem(ax.display);
 
     setDetected(!m_axes.isEmpty());
+    rebuildAxisFrames();
 
     if (isDetected())
     {
@@ -515,6 +767,11 @@ bool thorlabsKinesisPlugin::release()
     disableAllTriggers();
     closeDevices();
     m_axes.clear();
+    if (dock)
+    {
+        ui.comboBox_devices->clear();
+        rebuildAxisFrames();
+    }
 
     setInitialized(false);
     setDetected(false);
@@ -1171,6 +1428,14 @@ void thorlabsKinesisPlugin::initGUI()
     connect(ui.pushButton_disableTrigger, &QPushButton::clicked,
         this, &thorlabsKinesisPlugin::slot_disableTrigger, Qt::UniqueConnection);
 
+    ui.lineEdit_position->setText("0");
+    ui.lineEdit_step->setText("100");
+    ui.lineEdit_trigStart->setText("0");
+    ui.lineEdit_trigInterval->setText("0");
+    ui.lineEdit_trigCount->setText("1");
+    ui.lineEdit_trigWidth->setText("50000");
+
+    rebuildAxisFrames();
     setMotionUiBusy(false);
 
     qDebug() << className << "::initGUI - signals connected";
@@ -1291,7 +1556,10 @@ void thorlabsKinesisPlugin::slot_getPosition()
     if (!readAxisPositionUm(id, pUm))
         return;
 
-    ui.label_positionValue->setText(QString::number(pUm, 'f', 3) + " µm");
+    const QString text = QString::number(pUm, 'f', 3) + " um";
+    ui.label_positionValue->setText(text);
+    if (id < m_axisUi.size() && m_axisUi[id].positionValue)
+        m_axisUi[id].positionValue->setText(text);
 }
 
 void thorlabsKinesisPlugin::slot_openLogger()
@@ -1414,7 +1682,7 @@ void thorlabsKinesisPlugin::slot_disableTrigger()
 
     if (ax.isM30xy)
     {
-        if (!m30xyForBase(ax.baseSerial)->disableTrigger((unsigned)ax.channel, &err))
+        if (!m30xyForBase(ax.baseSerial)->disableTrigger((unsigned)ax.channel, true, &err))
             QMessageBox::warning(dock, "Thorlabs", QString("Disable trigger failed, err=%1").arg(err));
     }
     else
