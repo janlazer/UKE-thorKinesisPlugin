@@ -3,6 +3,20 @@
 #include <string>
 #include <cstdint>
 
+enum class BDCTriggerMode : int
+{
+    Disabled = 0x00,
+    PositionStepForward = 0x0D,
+    PositionStepReverse = 0x0E,
+    PositionStepBoth = 0x0F
+};
+
+enum class BDCTriggerPolarity : int
+{
+    High = 0x01,
+    Low = 0x02
+};
+
 struct BDCTriggerConfig
 {
     bool enabled = false;
@@ -20,7 +34,7 @@ struct BDCTriggerConfig
     int32_t intervalRev = 0;
     int32_t pulseCountRev = 1;
 
-    int32_t cycleCount = 2147483647;
+    int32_t cycleCount = 1;
     int32_t pulseWidthUs = 50000;
 };
 
@@ -39,13 +53,16 @@ public:
     bool homeAllIfNeeded(short* errOut = nullptr);
     bool homeIfNeeded(unsigned channel, short* errOut = nullptr);
 
+    bool beginMoveTo(int32_t pos, unsigned channel, short* errOut = nullptr);
+    bool waitForPosition(int32_t targetPos, unsigned channel, int timeoutMs = 120000, short* errOut = nullptr);
     bool moveTo(int32_t pos, unsigned channel, short* errOut = nullptr);
     bool moveRel(int32_t delta, unsigned channel, short* errOut = nullptr);
     bool stopImmediate(unsigned channel, short* errOut = nullptr);
 
-    int32_t getPosition(unsigned channel) const;
+    int32_t getPosition(unsigned channel, short* errOut = nullptr) const;
+    bool isMoving(unsigned channel, short* errOut = nullptr) const;
 
-    // Motion - public standard unit: micrometers (µm)
+    // Motion - public standard unit: micrometers (Âµm)
     bool moveToUm(double posUm, unsigned channel, short* errOut = nullptr);
     bool moveRelUm(double deltaUm, unsigned channel, short* errOut = nullptr);
     double getPositionUm(unsigned channel, short* errOut = nullptr) const;
@@ -53,6 +70,7 @@ public:
     // Unit conversion helpers
     double umPerDeviceUnit(unsigned channel) const;
     double mmPerDeviceUnit(unsigned channel) const;
+    double getMaxVelocityMmS(unsigned channel, short* errOut = nullptr) const;
 
     double deviceToUm(int32_t deviceUnits, unsigned channel) const;
     double deviceToMm(int32_t deviceUnits, unsigned channel) const;
@@ -77,7 +95,11 @@ private:
     bool enableIfNeeded(unsigned channel, short* errOut = nullptr);
     bool enableAll(short* errOut = nullptr);
 
-    bool waitUntilIdle(unsigned channel, int timeoutMs, short* errOut = nullptr);
+    bool validateOpen(short* errOut = nullptr) const;
+    bool validateChannel(unsigned channel, short* errOut = nullptr) const;
+    bool validateReady(unsigned channel, short* errOut = nullptr) const;
+
+    bool waitUntilIdle(unsigned channel, int32_t targetPos, int timeoutMs, short* errOut = nullptr);
     bool waitUntilHomed(unsigned channel, int timeoutMs, short* errOut = nullptr);
 
 private:
@@ -92,5 +114,5 @@ private:
     double factor_acceleration_mm[2] = { 1.0, 1.0 };   // mm/s^2 / device unit
 
     // Public standard unit
-    double factor_um[2] = { 1000.0, 1000.0 };          // µm / device unit
+    double factor_um[2] = { 1000.0, 1000.0 };          // Âµm / device unit
 };

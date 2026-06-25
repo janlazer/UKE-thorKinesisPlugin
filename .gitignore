@@ -1,0 +1,10 @@
+﻿################################################################################
+# Diese .gitignore-Datei wurde von Microsoft(R) Visual Studio automatisch erstellt.
+################################################################################
+
+/thorKinesisPlugin/.vs
+/thorKinesisPlugin/x64
+/thorKinesisPlugin/x64/Debug
+/thorKinesisPlugin/x64/Release
+/thorKinesisPlugin/GeneratedFiles
+/thorKinesisPlugin/old

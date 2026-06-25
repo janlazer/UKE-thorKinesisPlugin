@@ -4,6 +4,8 @@
 #include <cstring>
 #include <vector>
 #include <string>
+#include <algorithm>
+#include <cctype>
 
 #include <QDebug>
 
@@ -20,20 +22,33 @@ static void appendSerialsFromType(std::vector<KinesisDeviceInfo>& out, int typeI
     qDebug() << "KinesisDetect - TLI_GetDeviceListByTypeExt type" << typeId << "err=" << err
         << "buffer=" << buffer;
 
+    if (err != 0)
+    {
+        qDebug() << "KinesisDetect - ignoring device list because the SDK returned an error";
+        return;
+    }
+
     char* ctx = nullptr;
     char* token = strtok_s(buffer, ",", &ctx);
 
     while (token)
     {
-        while (*token == ' ' || *token == '\t') ++token;
-        if (*token != '\0')
+        std::string serial(token);
+        serial.erase(serial.begin(), std::find_if(serial.begin(), serial.end(), [](unsigned char c) {
+            return !std::isspace(c);
+        }));
+        serial.erase(std::find_if(serial.rbegin(), serial.rend(), [](unsigned char c) {
+            return !std::isspace(c);
+        }).base(), serial.end());
+
+        if (!serial.empty())
         {
             KinesisDeviceInfo info;
-            info.serial = token;
+            info.serial = serial;
             info.deviceType = typeId;
             out.push_back(info);
 
-            qDebug() << "KinesisDetect - found type" << typeId << "serial=" << token;
+            qDebug() << "KinesisDetect - found type" << typeId << "serial=" << serial.c_str();
         }
         token = strtok_s(nullptr, ",", &ctx);
     }

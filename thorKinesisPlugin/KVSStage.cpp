@@ -4,10 +4,49 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 #include "Thorlabs.MotionControl.VerticalStage.h"
 
 // ---- KVSStage: enable only if required (using status bits) ----
+
+namespace
+{
+constexpr short kErrInvalidState = -1;
+constexpr short kErrInvalidArgument = -3;
+constexpr short kErrTimeout = -4;
+constexpr short kErrTargetNotReached = -5;
+constexpr double kPositionToleranceUm = 0.5;
+
+bool isValidTriggerMode(int mode)
+{
+    switch (mode)
+    {
+    case KMOT_TrigDisabled:
+    case KMOT_TrigIn_GPI:
+    case KMOT_TrigIn_RelativeMove:
+    case KMOT_TrigIn_AbsoluteMove:
+    case KMOT_TrigIn_Home:
+    case KMOT_TrigIn_Stop:
+    case KMOT_TrigIn_StartScan:
+    case KMOT_TrigIn_ShuttleMove:
+    case KMOT_TrigOut_GPO:
+    case KMOT_TrigOut_InMotion:
+    case KMOT_TrigOut_AtMaxVelocity:
+    case KMOT_TrigOut_AtPositionSteps:
+    case KMOT_TrigOut_Synch:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool isValidTriggerPolarity(int polarity)
+{
+    return polarity == KMOT_TrigPolarityHigh || polarity == KMOT_TrigPolarityLow;
+}
+}
 
 static bool isChannelEnabled(uint32_t bits)
 {
@@ -19,14 +58,10 @@ static void sleepMs(int ms)
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }
 
-static int32_t roundToI32(double v)
-{
-    return static_cast<int32_t>(v >= 0.0 ? (v + 0.5) : (v - 0.5));
-}
-
 KVSStage::KVSStage(const std::string& serial)
     : m_serial(serial)
 {
+    m_serialCStr = m_serial.c_str();
 }
 
 KVSStage::~KVSStage()
@@ -47,37 +82,69 @@ bool KVSStage::okOrLog(const char* fn, const std::string& serial, short err, sho
     return false;
 }
 
+bool KVSStage::validateOpen(short* errOut) const
+{
+    if (m_isOpen && m_serialCStr && *m_serialCStr)
+    {
+        if (errOut) *errOut = 0;
+        return true;
+    }
+
+    qDebug() << "KVSStage - device is not open serial=" << m_serial.c_str();
+    if (errOut) *errOut = kErrInvalidState;
+    return false;
+}
+
 bool KVSStage::open(const std::string& serial, bool home, short* errOut)
 {
-    if (!serial.empty())
-    {
-        m_serial = serial;
-        m_serialCStr = m_serial.c_str();
-    }
-    else if (m_serial.empty())
+    if (serial.empty())
     {
         qDebug() << "KVSStage::open ERROR no serial provided";
-        if (errOut) *errOut = -1;
+        if (errOut) *errOut = kErrInvalidArgument;
         return false;
     }
 
-    qDebug() << "KVSStage::open serial=" << m_serialCStr << "home=" << home;
     if (m_isOpen)
     {
+        if (serial != m_serial)
+        {
+            qDebug() << "KVSStage::open ERROR already open with another serial=" << m_serial.c_str();
+            if (errOut) *errOut = kErrInvalidState;
+            return false;
+        }
+
         qDebug() << "KVSStage::open already open serial=" << m_serialCStr;
         if (errOut) *errOut = 0;
-        return false;
+        return true;
     }
+
+    m_serial = serial;
+    m_serialCStr = m_serial.c_str();
+
+    qDebug() << "KVSStage::open serial=" << m_serialCStr << "home=" << home;
 
     short err = KVS_Open(m_serialCStr);
     if (!okOrLog("KVS_Open", m_serial, err, errOut))
         return false;
 
+    m_isOpen = true;
+
     const bool loaded = KVS_LoadSettings(m_serialCStr);
     qDebug() << "KVSStage::open KVS_LoadSettings loaded=" << loaded;
+    if (!loaded)
+    {
+        if (errOut) *errOut = kErrInvalidState;
+        close();
+        return false;
+    }
 
     err = KVS_RequestSettings(m_serialCStr);
     qDebug() << "KVSStage::open KVS_RequestSettings err=" << err;
+    if (!okOrLog("KVS_RequestSettings", m_serial, err, errOut))
+    {
+        close();
+        return false;
+    }
 
     sleepMs(300);
 
@@ -91,6 +158,11 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
         << "stepsPerRev=" << stepsPerRev
         << "gearBoxRatio=" << gearBoxRatio
         << "pitch=" << pitch;
+    if (!okOrLog("KVS_GetMotorParamsExt", m_serial, err, errOut))
+    {
+        close();
+        return false;
+    }
     sleepMs(300);
 
     // Read conversion factors from Kinesis.
@@ -102,21 +174,31 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
     err = KVS_GetRealValueFromDeviceUnit(m_serialCStr, 1, &realPosMmPerDevice, 0);
     if (!okOrLog("KVS_GetRealValueFromDeviceUnit(pos)", m_serial, err, errOut))
     {
-        KVS_Close(m_serialCStr);
+        close();
         return false;
     }
 
     err = KVS_GetRealValueFromDeviceUnit(m_serialCStr, 1, &realVelMmPerDevice, 1);
     if (!okOrLog("KVS_GetRealValueFromDeviceUnit(vel)", m_serial, err, errOut))
     {
-        KVS_Close(m_serialCStr);
+        close();
         return false;
     }
 
     err = KVS_GetRealValueFromDeviceUnit(m_serialCStr, 1, &realAccMmPerDevice, 2);
     if (!okOrLog("KVS_GetRealValueFromDeviceUnit(acc)", m_serial, err, errOut))
     {
-        KVS_Close(m_serialCStr);
+        close();
+        return false;
+    }
+
+    if (!std::isfinite(realPosMmPerDevice) || realPosMmPerDevice <= 0.0
+        || !std::isfinite(realVelMmPerDevice) || realVelMmPerDevice <= 0.0
+        || !std::isfinite(realAccMmPerDevice) || realAccMmPerDevice <= 0.0)
+    {
+        qDebug() << "KVSStage::open invalid conversion factors";
+        if (errOut) *errOut = kErrInvalidState;
+        close();
         return false;
     }
 
@@ -136,7 +218,7 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
     bool poll = KVS_StartPolling(m_serialCStr, 200);
     if (!okOrLog("KVS_StartPolling", m_serial, poll ? 0 : -1, errOut))
     {
-        KVS_Close(m_serialCStr);
+        close();
         return false;
     }
 
@@ -148,13 +230,14 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
         return false;
     }
 
-    m_isOpen = true;
-
     sleepMs(500);
     if (home)
     {
         if (!this->home(errOut))
+        {
+            close();
             return false;
+        }
     }
 
     if (errOut) *errOut = 0;
@@ -167,6 +250,8 @@ void KVSStage::close()
         return;
 
     qDebug() << "KVSStage::close serial=" << m_serialCStr;
+    short ignored = 0;
+    disableTrigger(&ignored);
     KVS_StopPolling(m_serialCStr);
     KVS_Close(m_serialCStr);
 
@@ -185,6 +270,9 @@ bool KVSStage::enable(short* errOut)
 bool KVSStage::enableIfNeeded(unsigned channel, short* errOut)
 {
     (void)channel;
+
+    if (!validateOpen(errOut))
+        return false;
 
     uint32_t bits = (uint32_t)KVS_GetStatusBits(m_serialCStr);
 
@@ -215,6 +303,12 @@ bool KVSStage::home(short* errOut)
 {
     qDebug() << "KVSStage::home serial=" << m_serialCStr;
 
+    if (!validateOpen(errOut))
+        return false;
+
+    if (!disableTrigger(errOut))
+        return false;
+
     KVS_ClearMessageQueue(m_serialCStr);
 
     short err = KVS_Home(m_serialCStr);
@@ -222,7 +316,10 @@ bool KVSStage::home(short* errOut)
         return false;
 
     if (!waitUntilHomed(120000, errOut))
+    {
+        KVS_StopImmediate(m_serialCStr);
         return false;
+    }
 
     if (errOut) *errOut = 0;
     return true;
@@ -231,6 +328,10 @@ bool KVSStage::home(short* errOut)
 bool KVSStage::homeIfNeeded(short* errOut)
 {
     qDebug() << "KVSStage::homeIfNeeded serial=" << m_serialCStr;
+
+    if (!validateOpen(errOut))
+        return false;
+
     const bool canMoveWithoutHoming = KVS_CanMoveWithoutHomingFirst(m_serialCStr);
 
     if (canMoveWithoutHoming)
@@ -244,9 +345,12 @@ bool KVSStage::homeIfNeeded(short* errOut)
     return home(errOut);
 }
 
-bool KVSStage::moveTo(int32_t pos, short* errOut)
+bool KVSStage::beginMoveTo(int32_t pos, short* errOut)
 {
-    qDebug() << "KVSStage::moveTo serial=" << m_serialCStr << "pos(device)=" << pos;
+    qDebug() << "KVSStage::beginMoveTo serial=" << m_serialCStr << "pos(device)=" << pos;
+
+    if (!validateOpen(errOut))
+        return false;
 
     KVS_ClearMessageQueue(m_serialCStr);
 
@@ -254,24 +358,67 @@ bool KVSStage::moveTo(int32_t pos, short* errOut)
     if (!okOrLog("KVS_MoveToPosition", m_serial, err, errOut))
         return false;
 
-    if (!waitUntilIdle(120000, errOut))
+    if (errOut) *errOut = 0;
+    return true;
+}
+
+bool KVSStage::waitForPosition(int32_t targetPos, int timeoutMs, short* errOut)
+{
+    if (!validateOpen(errOut))
         return false;
+
+    if (!waitUntilIdle(targetPos, timeoutMs, errOut))
+    {
+        KVS_StopImmediate(m_serialCStr);
+        short ignored = 0;
+        disableTrigger(&ignored);
+        return false;
+    }
 
     if (errOut) *errOut = 0;
     return true;
 }
 
+bool KVSStage::moveTo(int32_t pos, short* errOut)
+{
+    qDebug() << "KVSStage::moveTo serial=" << m_serialCStr << "pos(device)=" << pos;
+
+    if (!beginMoveTo(pos, errOut))
+        return false;
+
+    return waitForPosition(pos, 120000, errOut);
+}
+
 bool KVSStage::moveRel(int32_t delta, short* errOut)
 {
-    const int32_t cur = getPosition();
-    return moveTo(cur + delta, errOut);
+    short err = 0;
+    const int32_t cur = getPosition(&err);
+    if (err != 0)
+    {
+        if (errOut) *errOut = err;
+        return false;
+    }
+
+    const int64_t target = static_cast<int64_t>(cur) + static_cast<int64_t>(delta);
+    if (target < (std::numeric_limits<int32_t>::min)()
+        || target > (std::numeric_limits<int32_t>::max)())
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    return moveTo(static_cast<int32_t>(target), errOut);
 }
 
 bool KVSStage::moveToUm(double posUm, short* errOut)
 {
-    const int32_t targetDev = umToDevice(posUm, errOut);
-    if (errOut && *errOut != 0)
+    short err = 0;
+    const int32_t targetDev = umToDevice(posUm, &err);
+    if (err != 0)
+    {
+        if (errOut) *errOut = err;
         return false;
+    }
 
     qDebug() << "KVSStage::moveToUm serial=" << m_serialCStr
         << "posUm=" << posUm
@@ -282,9 +429,13 @@ bool KVSStage::moveToUm(double posUm, short* errOut)
 
 bool KVSStage::moveRelUm(double deltaUm, short* errOut)
 {
-    const int32_t deltaDev = umToDevice(deltaUm, errOut);
-    if (errOut && *errOut != 0)
+    short err = 0;
+    const int32_t deltaDev = umToDevice(deltaUm, &err);
+    if (err != 0)
+    {
+        if (errOut) *errOut = err;
         return false;
+    }
 
     qDebug() << "KVSStage::moveRelUm serial=" << m_serialCStr
         << "deltaUm=" << deltaUm
@@ -295,18 +446,46 @@ bool KVSStage::moveRelUm(double deltaUm, short* errOut)
 
 bool KVSStage::stopImmediate(short* errOut)
 {
+    if (!validateOpen(errOut))
+        return false;
+
+    short triggerErr = 0;
+    const bool triggerDisabled = disableTrigger(&triggerErr);
     short err = KVS_StopImmediate(m_serialCStr);
-    return okOrLog("KVS_StopImmediate", m_serial, err, errOut);
+    const bool stopped = okOrLog("KVS_StopImmediate", m_serial, err, errOut);
+    if (!triggerDisabled && errOut) *errOut = triggerErr;
+    return triggerDisabled && stopped;
 }
 
-int32_t KVSStage::getPosition() const
+int32_t KVSStage::getPosition(short* errOut) const
 {
+    if (!validateOpen(errOut))
+        return 0;
+
+    if (errOut) *errOut = 0;
     return (int32_t)KVS_GetPosition(m_serialCStr);
+}
+
+bool KVSStage::isMoving(short* errOut) const
+{
+    if (!validateOpen(errOut))
+        return false;
+
+    const uint32_t bits = static_cast<uint32_t>(KVS_GetStatusBits(m_serialCStr));
+    if (errOut) *errOut = 0;
+    return (bits & 0x00000030u) != 0;
 }
 
 double KVSStage::getPositionUm(short* errOut) const
 {
-    const int32_t posDev = getPosition();
+    short err = 0;
+    const int32_t posDev = getPosition(&err);
+    if (err != 0)
+    {
+        if (errOut) *errOut = err;
+        return 0.0;
+    }
+
     const double posUm = deviceToUm(posDev);
 
     if (errOut) *errOut = 0;
@@ -325,6 +504,15 @@ double KVSStage::deviceToUm(int32_t deviceUnits) const
 
 int32_t KVSStage::mmToDevice(double mm, short* errOut) const
 {
+    if (!validateOpen(errOut))
+        return 0;
+
+    if (!std::isfinite(mm))
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return 0;
+    }
+
     int deviceUnits = 0;
     short err = KVS_GetDeviceUnitFromRealValue(m_serialCStr, mm, &deviceUnits, 0);
     if (!okOrLog("KVS_GetDeviceUnitFromRealValue(pos)", m_serial, err, errOut))
@@ -335,6 +523,12 @@ int32_t KVSStage::mmToDevice(double mm, short* errOut) const
 
 int32_t KVSStage::umToDevice(double um, short* errOut) const
 {
+    if (!std::isfinite(um))
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return 0;
+    }
+
     const double mm = um / 1000.0;
     return mmToDevice(mm, errOut);
 }
@@ -351,6 +545,11 @@ const KVSTriggerConfig& KVSStage::triggerConfig() const
 
 bool KVSStage::applyTriggerConfig(short* errOut)
 {
+    if (!validateOpen(errOut))
+        return false;
+
+    const KVSTriggerConfig requested = m_trig;
+
     qDebug() << "KVSStage::applyTriggerConfig serial=" << m_serialCStr
         << "enabled=" << m_trig.enabled
         << "t1Mode=" << m_trig.trigger1Mode
@@ -363,46 +562,68 @@ bool KVSStage::applyTriggerConfig(short* errOut)
         << "countRev=" << m_trig.pulseCountRev
         << "pulseWidthUs=" << m_trig.pulseWidthUs;
 
-    // KVS trigger width comment in header:
-    // range 1000 (1ms) to 32767000 (32767ms)
-    // -> keep internal field as "us" and clamp accordingly.
-    const __int32 pulseWidth = (__int32)std::max<int32_t>(1000, std::min<int32_t>(m_trig.pulseWidthUs, 32767000));
+    if (!requested.enabled)
+        return disableTrigger(errOut);
+
+    if (!isValidTriggerMode(requested.trigger1Mode)
+        || !isValidTriggerMode(requested.trigger2Mode)
+        || !isValidTriggerPolarity(requested.trigger1Polarity)
+        || !isValidTriggerPolarity(requested.trigger2Polarity)
+        || requested.pulseWidthUs < 1000
+        || requested.pulseWidthUs > 32767000
+        || requested.cycleCount <= 0)
+    {
+        qDebug() << "KVSStage::applyTriggerConfig invalid trigger configuration";
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    const bool needsPositionSteps = requested.trigger1Mode == KMOT_TrigOut_AtPositionSteps
+        || requested.trigger2Mode == KMOT_TrigOut_AtPositionSteps;
+    if (needsPositionSteps
+        && (requested.intervalFwd <= 0
+            || requested.intervalRev <= 0
+            || requested.pulseCountFwd <= 0
+            || requested.pulseCountRev <= 0))
+    {
+        qDebug() << "KVSStage::applyTriggerConfig invalid position-step parameters";
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
 
     KMOT_TriggerConfig cfg = {};
     KMOT_TriggerParams params = {};
 
-    if (m_trig.enabled)
-    {
-        cfg.Trigger1Mode = (KMOT_TriggerPortMode)m_trig.trigger1Mode;
-        cfg.Trigger1Polarity = (KMOT_TriggerPortPolarity)m_trig.trigger1Polarity;
-        cfg.Trigger2Mode = (KMOT_TriggerPortMode)m_trig.trigger2Mode;
-        cfg.Trigger2Polarity = (KMOT_TriggerPortPolarity)m_trig.trigger2Polarity;
-    }
-    else
-    {
-        cfg.Trigger1Mode = KMOT_TrigDisabled;
-        cfg.Trigger1Polarity = KMOT_TrigPolarityHigh;
-        cfg.Trigger2Mode = KMOT_TrigDisabled;
-        cfg.Trigger2Polarity = KMOT_TrigPolarityHigh;
-    }
+    cfg.Trigger1Mode = static_cast<KMOT_TriggerPortMode>(requested.trigger1Mode);
+    cfg.Trigger1Polarity = static_cast<KMOT_TriggerPortPolarity>(requested.trigger1Polarity);
+    cfg.Trigger2Mode = static_cast<KMOT_TriggerPortMode>(requested.trigger2Mode);
+    cfg.Trigger2Polarity = static_cast<KMOT_TriggerPortPolarity>(requested.trigger2Polarity);
 
-    params.TriggerStartPositionFwd = m_trig.startPosFwd;
-    params.TriggerIntervalFwd = m_trig.intervalFwd;
-    params.TriggerPulseCountFwd = m_trig.pulseCountFwd;
-    params.TriggerStartPositionRev = m_trig.startPosRev;
-    params.TriggerIntervalRev = m_trig.intervalRev;
-    params.TriggerPulseCountRev = m_trig.pulseCountRev;
-    params.TriggerPulseWidth = pulseWidth;
-    params.CycleCount = m_trig.cycleCount;
+    params.TriggerStartPositionFwd = requested.startPosFwd;
+    params.TriggerIntervalFwd = requested.intervalFwd;
+    params.TriggerPulseCountFwd = requested.pulseCountFwd;
+    params.TriggerStartPositionRev = requested.startPosRev;
+    params.TriggerIntervalRev = requested.intervalRev;
+    params.TriggerPulseCountRev = requested.pulseCountRev;
+    params.TriggerPulseWidth = requested.pulseWidthUs;
+    params.CycleCount = requested.cycleCount;
 
-    short err = KVS_SetTriggerConfigParamsBlock(m_serialCStr, &cfg);
-    if (!okOrLog("KVS_SetTriggerConfigParamsBlock", m_serial, err, errOut))
+    if (!disableTrigger(errOut))
         return false;
 
-    err = KVS_SetTriggerParamsParamsBlock(m_serialCStr, &params);
+    short err = KVS_SetTriggerParamsParamsBlock(m_serialCStr, &params);
     if (!okOrLog("KVS_SetTriggerParamsParamsBlock", m_serial, err, errOut))
         return false;
 
+    err = KVS_SetTriggerConfigParamsBlock(m_serialCStr, &cfg);
+    if (!okOrLog("KVS_SetTriggerConfigParamsBlock", m_serial, err, errOut))
+    {
+        short ignored = 0;
+        disableTrigger(&ignored);
+        return false;
+    }
+
+    m_trig = requested;
     if (errOut) *errOut = 0;
     return true;
 }
@@ -410,6 +631,9 @@ bool KVSStage::applyTriggerConfig(short* errOut)
 bool KVSStage::disableTrigger(short* errOut)
 {
     qDebug() << "KVSStage::disableTrigger serial=" << m_serialCStr;
+
+    if (!validateOpen(errOut))
+        return false;
 
     KMOT_TriggerConfig cfg = {};
     cfg.Trigger1Mode = KMOT_TrigDisabled;
@@ -421,6 +645,7 @@ bool KVSStage::disableTrigger(short* errOut)
     if (!okOrLog("KVS_SetTriggerConfigParamsBlock", m_serial, err, errOut))
         return false;
 
+    m_trig.enabled = false;
     if (errOut) *errOut = 0;
     return true;
 }
@@ -438,18 +663,23 @@ static bool isHomedFromStatus(uint32_t statusBits)
     return (statusBits & HOMED_MASK) != 0;
 }
 
-bool KVSStage::waitUntilIdle(int timeoutMs, short* errOut)
+bool KVSStage::waitUntilIdle(int32_t targetPos, int timeoutMs, short* errOut)
 {
+    if (!validateOpen(errOut))
+        return false;
+
     const auto t0 = std::chrono::steady_clock::now();
-    int32_t lastPos = getPosition();
+    int32_t lastPos = getPosition(errOut);
     int stableCount = 0;
+    bool seenMoving = false;
 
     while (true)
     {
         uint32_t bits = (uint32_t)KVS_GetStatusBits(m_serialCStr);
-        int32_t pos = getPosition();
+        int32_t pos = getPosition(errOut);
 
         const bool moving = isMovingFromStatus(bits);
+        if (moving) seenMoving = true;
         if (!moving)
         {
             if (pos == lastPos) stableCount++;
@@ -457,8 +687,27 @@ bool KVSStage::waitUntilIdle(int timeoutMs, short* errOut)
 
             if (stableCount >= 5)
             {
-                if (errOut) *errOut = 0;
-                return true;
+                const int64_t positionError = static_cast<int64_t>(pos) - static_cast<int64_t>(targetPos);
+                const double positionErrorUm = std::abs(
+                    static_cast<double>(positionError) * factor_um);
+                if (positionErrorUm <= kPositionToleranceUm)
+                {
+                    if (errOut) *errOut = 0;
+                    return true;
+                }
+
+                if (!seenMoving && stableCount < 20)
+                {
+                    lastPos = pos;
+                    sleepMs(50);
+                    continue;
+                }
+
+                qDebug() << "KVSStage::waitUntilIdle target not reached serial=" << m_serialCStr
+                    << "target=" << targetPos
+                    << "actual=" << pos;
+                if (errOut) *errOut = kErrTargetNotReached;
+                return false;
             }
         }
         else
@@ -475,7 +724,7 @@ bool KVSStage::waitUntilIdle(int timeoutMs, short* errOut)
             qDebug() << "KVSStage::waitUntilIdle TIMEOUT serial=" << m_serialCStr
                 << "lastPos=" << lastPos
                 << "statusBits=0x" << QString::number(bits, 16);
-            if (errOut) *errOut = -1;
+            if (errOut) *errOut = kErrTimeout;
             return false;
         }
 
@@ -485,7 +734,11 @@ bool KVSStage::waitUntilIdle(int timeoutMs, short* errOut)
 
 bool KVSStage::waitUntilHomed(int timeoutMs, short* errOut)
 {
+    if (!validateOpen(errOut))
+        return false;
+
     const auto t0 = std::chrono::steady_clock::now();
+    int idleWithoutHomeCount = 0;
 
     while (true)
     {
@@ -499,13 +752,28 @@ bool KVSStage::waitUntilHomed(int timeoutMs, short* errOut)
             return true;
         }
 
+        if (!homed && !moving)
+        {
+            ++idleWithoutHomeCount;
+            if (idleWithoutHomeCount >= 40)
+            {
+                qDebug() << "KVSStage::waitUntilHomed stopped before homing completed serial=" << m_serialCStr;
+                if (errOut) *errOut = kErrTargetNotReached;
+                return false;
+            }
+        }
+        else
+        {
+            idleWithoutHomeCount = 0;
+        }
+
         const auto now = std::chrono::steady_clock::now();
         const int elapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
         if (elapsed > timeoutMs)
         {
             qDebug() << "KVSStage::waitUntilHomed TIMEOUT serial=" << m_serialCStr
                 << "statusBits=0x" << QString::number(bits, 16);
-            if (errOut) *errOut = -1;
+            if (errOut) *errOut = kErrTimeout;
             return false;
         }
 

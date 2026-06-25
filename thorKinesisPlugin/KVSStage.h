@@ -1,6 +1,5 @@
 #pragma once
 #include <string>
-#include <cmath>
 #include <cstdint>
 
 struct KVSTriggerConfig
@@ -19,7 +18,7 @@ struct KVSTriggerConfig
     int32_t intervalRev = 0;
     int32_t pulseCountRev = 1;
 
-    int32_t cycleCount = 2147483647;
+    int32_t cycleCount = 1;
     int32_t pulseWidthUs = 50000;
 };
 
@@ -36,13 +35,16 @@ public:
     bool home(short* errOut = nullptr);
     bool homeIfNeeded(short* errOut = nullptr);
 
+    bool beginMoveTo(int32_t pos, short* errOut = nullptr);
+    bool waitForPosition(int32_t targetPos, int timeoutMs = 120000, short* errOut = nullptr);
     bool moveTo(int32_t pos, short* errOut = nullptr);
     bool moveRel(int32_t delta, short* errOut = nullptr);
     bool stopImmediate(short* errOut = nullptr);
 
-    int32_t getPosition() const;
+    int32_t getPosition(short* errOut = nullptr) const;
+    bool isMoving(short* errOut = nullptr) const;
 
-    // Motion - public standard unit: micrometers (µm)
+    // Motion - public standard unit: micrometers (Âµm)
     bool moveToUm(double posUm, short* errOut = nullptr);
     bool moveRelUm(double deltaUm, short* errOut = nullptr);
     double getPositionUm(short* errOut = nullptr) const;
@@ -73,7 +75,8 @@ private:
 
     bool enable(short* errOut = nullptr);
     bool enableIfNeeded(unsigned channel, short* errOut);
-    bool waitUntilIdle(int timeoutMs, short* errOut = nullptr);
+    bool validateOpen(short* errOut = nullptr) const;
+    bool waitUntilIdle(int32_t targetPos, int timeoutMs, short* errOut = nullptr);
     bool waitUntilHomed(int timeoutMs, short* errOut = nullptr);
 
 private:
@@ -89,5 +92,5 @@ private:
     double factor_acceleration_mm = 1.0;   // mm/s^2 per device unit
 
     // Public standard unit for this wrapper
-    double factor_um = 1000.0;             // µm per device unit
+    double factor_um = 1000.0;             // Âµm per device unit
 };

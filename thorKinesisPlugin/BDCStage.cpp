@@ -4,11 +4,56 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 // Kinesis C API
 #include "Thorlabs.MotionControl.Benchtop.DCServo.h"
 
 // ---- BDCStage: enable only if required (using status bits) ----
+
+namespace
+{
+constexpr short kErrInvalidState = -1;
+constexpr short kErrInvalidChannel = -2;
+constexpr short kErrInvalidArgument = -3;
+constexpr short kErrTimeout = -4;
+constexpr short kErrTargetNotReached = -5;
+constexpr double kPositionToleranceUm = 0.5;
+
+bool isValidTriggerMode(int mode)
+{
+    switch (mode)
+    {
+    case KMOT_TrigDisabled:
+    case KMOT_TrigIn_GPI:
+    case KMOT_TrigIn_RelativeMove:
+    case KMOT_TrigIn_AbsoluteMove:
+    case KMOT_TrigIn_Home:
+    case KMOT_TrigIn_Stop:
+    case KMOT_TrigIn_StartScan:
+    case KMOT_TrigIn_ShuttleMove:
+    case KMOT_TrigOut_GPO:
+    case KMOT_TrigOut_InMotion:
+    case KMOT_TrigOut_AtMaxVelocity:
+    case KMOT_TrigOut_AtPositionStepFwd:
+    case KMOT_TrigOut_AtPositionStepRev:
+    case KMOT_TrigOut_AtPositionStepBoth:
+    case KMOT_TrigOut_AtFwdLimit:
+    case KMOT_TrigOut_AtBwdLimit:
+    case KMOT_TrigOut_AtLimit:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool isValidTriggerPolarity(int polarity)
+{
+    return polarity == KMOT_TrigPolarityHigh || polarity == KMOT_TrigPolarityLow;
+}
+
+}
 
 static bool isChannelEnabled(uint32_t bits)
 {
@@ -22,12 +67,15 @@ static void sleepMs(int ms)
 
 static int channelIndex(unsigned channel)
 {
-    return (channel == 2) ? 1 : 0;
+    if (channel == 1) return 0;
+    if (channel == 2) return 1;
+    return -1;
 }
 
 BDCStage::BDCStage(const std::string& baseSerial)
     : m_serial(baseSerial)
 {
+    m_serialCStr = m_serial.c_str();
 }
 
 BDCStage::~BDCStage()
@@ -51,40 +99,91 @@ bool BDCStage::okOrLog(const char* fn, const std::string& serial, short err, uns
     return false;
 }
 
-bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
+bool BDCStage::validateOpen(short* errOut) const
 {
-    if (!baseSerial.empty())
+    if (m_isOpen && m_serialCStr && *m_serialCStr)
     {
-        m_serial = baseSerial;
-        m_serialCStr = m_serial.c_str();
-    }
-    else
-    {
-        qDebug() << "BDCStage::open ERROR no serial provided";
-        if (errOut) *errOut = -1;
-        return false;
+        if (errOut) *errOut = 0;
+        return true;
     }
 
-    qDebug() << "BDCStage::open serial=" << m_serialCStr << "home=" << home;
+    qDebug() << "BDCStage - device is not open serial=" << m_serial.c_str();
+    if (errOut) *errOut = kErrInvalidState;
+    return false;
+}
+
+bool BDCStage::validateChannel(unsigned channel, short* errOut) const
+{
+    if (channel == 1 || channel == 2)
+    {
+        if (errOut) *errOut = 0;
+        return true;
+    }
+
+    qDebug() << "BDCStage - invalid channel serial=" << m_serial.c_str() << "ch=" << channel;
+    if (errOut) *errOut = kErrInvalidChannel;
+    return false;
+}
+
+bool BDCStage::validateReady(unsigned channel, short* errOut) const
+{
+    return validateOpen(errOut) && validateChannel(channel, errOut);
+}
+
+bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
+{
+    if (baseSerial.empty())
+    {
+        qDebug() << "BDCStage::open ERROR no serial provided";
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
 
     if (m_isOpen)
     {
+        if (baseSerial != m_serial)
+        {
+            qDebug() << "BDCStage::open ERROR already open with another serial=" << m_serial.c_str();
+            if (errOut) *errOut = kErrInvalidState;
+            return false;
+        }
+
         qDebug() << "BDCStage::open already open serial=" << m_serialCStr;
         if (errOut) *errOut = 0;
-        return false;
+        return true;
     }
+
+    m_serial = baseSerial;
+    m_serialCStr = m_serial.c_str();
+
+    qDebug() << "BDCStage::open serial=" << m_serialCStr << "home=" << home;
 
     short err = BDC_Open(m_serialCStr);
     if (!okOrLog("BDC_Open", m_serial, err, 0, errOut))
         return false;
 
+    // From this point on close() must always release the SDK handle, even when
+    // settings, polling, enabling or homing fail later in this method.
+    m_isOpen = true;
+
     for (short ch = 1; ch <= 2; ++ch)
     {
         const bool loaded = BDC_LoadSettings(m_serialCStr, ch);
         qDebug() << "BDCStage::open BDC_LoadSettings ch=" << ch << "loaded=" << loaded;
+        if (!loaded)
+        {
+            if (errOut) *errOut = kErrInvalidState;
+            close();
+            return false;
+        }
 
         err = BDC_RequestSettings(m_serialCStr, ch);
         qDebug() << "BDCStage::open BDC_RequestSettings ch=" << ch << "err = " << err;
+        if (!okOrLog("BDC_RequestSettings", m_serial, err, ch, errOut))
+        {
+            close();
+            return false;
+        }
     }
     sleepMs(300);
 
@@ -100,6 +199,11 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
             << "stepsPerRev=" << stepsPerRev
             << "gearBoxRatio=" << gearBoxRatio
             << "pitch=" << pitch;
+        if (!okOrLog("BDC_GetMotorParamsExt", m_serial, err, ch, errOut))
+        {
+            close();
+            return false;
+        }
         sleepMs(300);
     }
 
@@ -116,21 +220,31 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
         err = BDC_GetRealValueFromDeviceUnit(m_serialCStr, ch, 1, &realPosMmPerDevice, 0);
         if (!okOrLog("BDC_GetRealValueFromDeviceUnit(pos)", m_serial, err, ch, errOut))
         {
-            BDC_Close(m_serialCStr);
+            close();
             return false;
         }
 
         err = BDC_GetRealValueFromDeviceUnit(m_serialCStr, ch, 1, &realVelMmPerDevice, 1);
         if (!okOrLog("BDC_GetRealValueFromDeviceUnit(vel)", m_serial, err, ch, errOut))
         {
-            BDC_Close(m_serialCStr);
+            close();
             return false;
         }
 
         err = BDC_GetRealValueFromDeviceUnit(m_serialCStr, ch, 1, &realAccMmPerDevice, 2);
         if (!okOrLog("BDC_GetRealValueFromDeviceUnit(acc)", m_serial, err, ch, errOut))
         {
-            BDC_Close(m_serialCStr);
+            close();
+            return false;
+        }
+
+        if (!std::isfinite(realPosMmPerDevice) || realPosMmPerDevice <= 0.0
+            || !std::isfinite(realVelMmPerDevice) || realVelMmPerDevice <= 0.0
+            || !std::isfinite(realAccMmPerDevice) || realAccMmPerDevice <= 0.0)
+        {
+            qDebug() << "BDCStage::open invalid conversion factors ch=" << ch;
+            if (errOut) *errOut = kErrInvalidState;
+            close();
             return false;
         }
 
@@ -161,14 +275,13 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
         return false;
     }
 
-    m_isOpen = true;
-
     if (home)
     {
         if (!this->homeAllIfNeeded(errOut))
         {
             qDebug() << "BDCStage::open homeAll FAILED serial=" << m_serial.c_str()
                 << "err=" << (errOut ? *errOut : -9999);
+            close();
             return false;
         }
     }
@@ -180,6 +293,9 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
 
 bool BDCStage::startPollingAll(short* errOut)
 {
+    if (!validateOpen(errOut))
+        return false;
+
     bool poll1 = BDC_StartPolling(m_serialCStr, 1, 200);
     if (!okOrLog("BDC_StartPolling", m_serial, poll1 ? 0 : -1, 1, errOut))
         return false;
@@ -194,6 +310,9 @@ bool BDCStage::startPollingAll(short* errOut)
 
 bool BDCStage::enableIfNeeded(unsigned channel, short* errOut)
 {
+    if (!validateReady(channel, errOut))
+        return false;
+
     uint32_t bits = (uint32_t)BDC_GetStatusBits(m_serialCStr, (short)channel);
 
     if (isChannelEnabled(bits))
@@ -238,6 +357,10 @@ void BDCStage::close()
 
     qDebug() << "BDCStage::close serial=" << m_serialCStr;
 
+    short ignored = 0;
+    disableTrigger(1, &ignored);
+    disableTrigger(2, &ignored);
+
     BDC_StopPolling(m_serialCStr, 1);
     BDC_StopPolling(m_serialCStr, 2);
     BDC_Close(m_serialCStr);
@@ -248,6 +371,9 @@ void BDCStage::close()
 bool BDCStage::homeIfNeeded(unsigned channel, short* errOut)
 {
     qDebug() << "BDCStage::homeIfNeeded serial=" << m_serialCStr << "ch=" << channel;
+
+    if (!validateReady(channel, errOut))
+        return false;
 
     const bool canMoveWithoutHoming = BDC_CanMoveWithoutHomingFirst(m_serialCStr, (short)channel);
 
@@ -287,6 +413,12 @@ bool BDCStage::home(unsigned channel, short* errOut)
 {
     qDebug() << "BDCStage::home serial=" << m_serialCStr << "ch=" << channel;
 
+    if (!validateReady(channel, errOut))
+        return false;
+
+    if (!disableTrigger(channel, errOut))
+        return false;
+
     BDC_ClearMessageQueue(m_serialCStr, (short)channel);
 
     short err = BDC_Home(m_serialCStr, (short)channel);
@@ -294,9 +426,48 @@ bool BDCStage::home(unsigned channel, short* errOut)
         return false;
 
     if (!waitUntilHomed(channel, 120000, errOut))
+    {
+        BDC_StopImmediate(m_serialCStr, (short)channel);
         return false;
+    }
 
     qDebug() << "BDCStage::home DONE serial=" << m_serialCStr << "ch=" << channel;
+    if (errOut) *errOut = 0;
+    return true;
+}
+
+bool BDCStage::beginMoveTo(int32_t pos, unsigned channel, short* errOut)
+{
+    qDebug() << "BDCStage::beginMoveTo serial=" << m_serialCStr << "ch=" << channel << "pos(device)=" << pos;
+
+    if (!validateReady(channel, errOut))
+        return false;
+
+    BDC_ClearMessageQueue(m_serialCStr, (short)channel);
+
+    short err = BDC_MoveToPosition(m_serialCStr, (short)channel, (int)pos);
+    if (!okOrLog("BDC_MoveToPosition", m_serial, err, channel, errOut))
+        return false;
+
+    if (errOut) *errOut = 0;
+    return true;
+}
+
+bool BDCStage::waitForPosition(int32_t targetPos, unsigned channel, int timeoutMs, short* errOut)
+{
+    if (!validateReady(channel, errOut))
+        return false;
+
+    if (!waitUntilIdle(channel, targetPos, timeoutMs, errOut))
+    {
+        // A failed blocking move must never continue in the background or
+        // leave a position trigger armed.
+        BDC_StopImmediate(m_serialCStr, (short)channel);
+        short ignored = 0;
+        disableTrigger(channel, &ignored);
+        return false;
+    }
+
     if (errOut) *errOut = 0;
     return true;
 }
@@ -305,30 +476,42 @@ bool BDCStage::moveTo(int32_t pos, unsigned channel, short* errOut)
 {
     qDebug() << "BDCStage::moveTo serial=" << m_serialCStr << "ch=" << channel << "pos(device)=" << pos;
 
-    BDC_ClearMessageQueue(m_serialCStr, (short)channel);
-
-    short err = BDC_MoveToPosition(m_serialCStr, (short)channel, (int)pos);
-    if (!okOrLog("BDC_MoveToPosition", m_serial, err, channel, errOut))
+    if (!beginMoveTo(pos, channel, errOut))
         return false;
 
-    if (!waitUntilIdle(channel, 120000, errOut))
-        return false;
-
-    if (errOut) *errOut = 0;
-    return true;
+    return waitForPosition(pos, channel, 120000, errOut);
 }
 
 bool BDCStage::moveRel(int32_t delta, unsigned channel, short* errOut)
 {
-    const int32_t cur = getPosition(channel);
-    return moveTo(cur + delta, channel, errOut);
+    short err = 0;
+    const int32_t cur = getPosition(channel, &err);
+    if (err != 0)
+    {
+        if (errOut) *errOut = err;
+        return false;
+    }
+
+    const int64_t target = static_cast<int64_t>(cur) + static_cast<int64_t>(delta);
+    if (target < (std::numeric_limits<int32_t>::min)()
+        || target > (std::numeric_limits<int32_t>::max)())
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    return moveTo(static_cast<int32_t>(target), channel, errOut);
 }
 
 bool BDCStage::moveToUm(double posUm, unsigned channel, short* errOut)
 {
-    const int32_t targetDev = umToDevice(posUm, channel, errOut);
-    if (errOut && *errOut != 0)
+    short err = 0;
+    const int32_t targetDev = umToDevice(posUm, channel, &err);
+    if (err != 0)
+    {
+        if (errOut) *errOut = err;
         return false;
+    }
 
     qDebug() << "BDCStage::moveToUm serial=" << m_serialCStr
         << "ch=" << channel
@@ -340,9 +523,13 @@ bool BDCStage::moveToUm(double posUm, unsigned channel, short* errOut)
 
 bool BDCStage::moveRelUm(double deltaUm, unsigned channel, short* errOut)
 {
-    const int32_t deltaDev = umToDevice(deltaUm, channel, errOut);
-    if (errOut && *errOut != 0)
+    short err = 0;
+    const int32_t deltaDev = umToDevice(deltaUm, channel, &err);
+    if (err != 0)
+    {
+        if (errOut) *errOut = err;
         return false;
+    }
 
     qDebug() << "BDCStage::moveRelUm serial=" << m_serialCStr
         << "ch=" << channel
@@ -356,18 +543,47 @@ bool BDCStage::stopImmediate(unsigned channel, short* errOut)
 {
     qDebug() << "BDCStage::stopImmediate serial=" << m_serialCStr << "ch=" << channel;
 
+    if (!validateReady(channel, errOut))
+        return false;
+
+    short triggerErr = 0;
+    const bool triggerDisabled = disableTrigger(channel, &triggerErr);
+
     short err = BDC_StopImmediate(m_serialCStr, (short)channel);
-    return okOrLog("BDC_StopImmediate", m_serial, err, channel, errOut);
+    const bool stopped = okOrLog("BDC_StopImmediate", m_serial, err, channel, errOut);
+    if (!triggerDisabled && errOut) *errOut = triggerErr;
+    return triggerDisabled && stopped;
 }
 
-int32_t BDCStage::getPosition(unsigned channel) const
+int32_t BDCStage::getPosition(unsigned channel, short* errOut) const
 {
+    if (!validateReady(channel, errOut))
+        return 0;
+
+    if (errOut) *errOut = 0;
     return (int32_t)BDC_GetPosition(m_serialCStr, (short)channel);
+}
+
+bool BDCStage::isMoving(unsigned channel, short* errOut) const
+{
+    if (!validateReady(channel, errOut))
+        return false;
+
+    const uint32_t bits = static_cast<uint32_t>(BDC_GetStatusBits(m_serialCStr, static_cast<short>(channel)));
+    if (errOut) *errOut = 0;
+    return (bits & 0x00000030u) != 0;
 }
 
 double BDCStage::getPositionUm(unsigned channel, short* errOut) const
 {
-    const int32_t posDev = getPosition(channel);
+    short err = 0;
+    const int32_t posDev = getPosition(channel, &err);
+    if (err != 0)
+    {
+        if (errOut) *errOut = err;
+        return 0.0;
+    }
+
     const double posUm = deviceToUm(posDev, channel);
     if (errOut) *errOut = 0;
     return posUm;
@@ -375,26 +591,76 @@ double BDCStage::getPositionUm(unsigned channel, short* errOut) const
 
 double BDCStage::umPerDeviceUnit(unsigned channel) const
 {
-    return factor_um[channelIndex(channel)];
+    const int idx = channelIndex(channel);
+    if (idx < 0)
+    {
+        qDebug() << "BDCStage::umPerDeviceUnit invalid channel=" << channel;
+        return 0.0;
+    }
+    return factor_um[idx];
 }
 
 double BDCStage::mmPerDeviceUnit(unsigned channel) const
 {
-    return factor_position_mm[channelIndex(channel)];
+    const int idx = channelIndex(channel);
+    if (idx < 0)
+    {
+        qDebug() << "BDCStage::mmPerDeviceUnit invalid channel=" << channel;
+        return 0.0;
+    }
+    return factor_position_mm[idx];
+}
+
+double BDCStage::getMaxVelocityMmS(unsigned channel, short* errOut) const
+{
+    if (!validateReady(channel, errOut))
+        return 0.0;
+
+    int acceleration = 0;
+    int maxVelocity = 0;
+    const short err = BDC_GetVelParams(
+        m_serialCStr, static_cast<short>(channel), &acceleration, &maxVelocity);
+    if (!okOrLog("BDC_GetVelParams", m_serial, err, channel, errOut))
+        return 0.0;
+
+    const double velocityMmS = static_cast<double>(maxVelocity)
+        * factor_velocity_mm[channelIndex(channel)];
+    if (!std::isfinite(velocityMmS) || velocityMmS <= 0.0)
+    {
+        if (errOut) *errOut = kErrInvalidState;
+        return 0.0;
+    }
+
+    if (errOut) *errOut = 0;
+    return velocityMmS;
 }
 
 double BDCStage::deviceToMm(int32_t deviceUnits, unsigned channel) const
 {
-    return static_cast<double>(deviceUnits) * factor_position_mm[channelIndex(channel)];
+    const int idx = channelIndex(channel);
+    if (idx < 0) return 0.0;
+    return static_cast<double>(deviceUnits) * factor_position_mm[idx];
 }
 
 double BDCStage::deviceToUm(int32_t deviceUnits, unsigned channel) const
 {
-    return static_cast<double>(deviceUnits) * factor_um[channelIndex(channel)];
+    const int idx = channelIndex(channel);
+    if (idx < 0) return 0.0;
+    return static_cast<double>(deviceUnits) * factor_um[idx];
 }
 
 int32_t BDCStage::mmToDevice(double mm, unsigned channel, short* errOut) const
 {
+    if (!validateReady(channel, errOut))
+        return 0;
+
+    if (!std::isfinite(mm))
+    {
+        qDebug() << "BDCStage::mmToDevice invalid value=" << mm;
+        if (errOut) *errOut = kErrInvalidArgument;
+        return 0;
+    }
+
     int deviceUnits = 0;
     short err = BDC_GetDeviceUnitFromRealValue(m_serialCStr, (short)channel, mm, &deviceUnits, 0);
     if (!okOrLog("BDC_GetDeviceUnitFromRealValue(pos)", m_serial, err, channel, errOut))
@@ -405,6 +671,12 @@ int32_t BDCStage::mmToDevice(double mm, unsigned channel, short* errOut) const
 
 int32_t BDCStage::umToDevice(double um, unsigned channel, short* errOut) const
 {
+    if (!std::isfinite(um))
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return 0;
+    }
+
     const double mm = um / 1000.0;
     return mmToDevice(mm, channel, errOut);
 }
@@ -421,6 +693,11 @@ const BDCTriggerConfig& BDCStage::triggerConfig() const
 
 bool BDCStage::applyTriggerConfig(unsigned channel, short* errOut)
 {
+    if (!validateReady(channel, errOut))
+        return false;
+
+    const BDCTriggerConfig requested = m_trig;
+
     qDebug() << "BDCStage::applyTriggerConfig serial=" << m_serialCStr
         << "ch=" << channel
         << "enabled=" << m_trig.enabled
@@ -434,44 +711,74 @@ bool BDCStage::applyTriggerConfig(unsigned channel, short* errOut)
         << "countRev=" << m_trig.pulseCountRev
         << "pulseWidthUs=" << m_trig.pulseWidthUs;
 
-    // BDC header: width range 1 us to 1 s
-    const __int32 pulseWidth = (__int32)std::max<int32_t>(1, std::min<int32_t>(m_trig.pulseWidthUs, 1000000));
+    if (!requested.enabled)
+        return disableTrigger(channel, errOut);
+
+    if (!isValidTriggerMode(requested.trigger1Mode)
+        || !isValidTriggerMode(requested.trigger2Mode)
+        || !isValidTriggerPolarity(requested.trigger1Polarity)
+        || !isValidTriggerPolarity(requested.trigger2Polarity)
+        || requested.pulseWidthUs < 1
+        || requested.pulseWidthUs > 1000000
+        || requested.cycleCount <= 0)
+    {
+        qDebug() << "BDCStage::applyTriggerConfig invalid trigger configuration";
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    const bool needsFwd = requested.trigger1Mode == KMOT_TrigOut_AtPositionStepFwd
+        || requested.trigger1Mode == KMOT_TrigOut_AtPositionStepBoth
+        || requested.trigger2Mode == KMOT_TrigOut_AtPositionStepFwd
+        || requested.trigger2Mode == KMOT_TrigOut_AtPositionStepBoth;
+    const bool needsRev = requested.trigger1Mode == KMOT_TrigOut_AtPositionStepRev
+        || requested.trigger1Mode == KMOT_TrigOut_AtPositionStepBoth
+        || requested.trigger2Mode == KMOT_TrigOut_AtPositionStepRev
+        || requested.trigger2Mode == KMOT_TrigOut_AtPositionStepBoth;
+
+    if ((needsFwd && (requested.intervalFwd <= 0 || requested.pulseCountFwd <= 0))
+        || (needsRev && (requested.intervalRev <= 0 || requested.pulseCountRev <= 0)))
+    {
+        qDebug() << "BDCStage::applyTriggerConfig invalid position-step parameters";
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
 
     KMOT_TriggerConfig cfg = {};
     KMOT_TriggerParams params = {};
 
-    if (m_trig.enabled)
-    {
-        cfg.Trigger1Mode = (KMOT_TriggerPortMode)m_trig.trigger1Mode;
-        cfg.Trigger1Polarity = (KMOT_TriggerPortPolarity)m_trig.trigger1Polarity;
-        cfg.Trigger2Mode = (KMOT_TriggerPortMode)m_trig.trigger2Mode;
-        cfg.Trigger2Polarity = (KMOT_TriggerPortPolarity)m_trig.trigger2Polarity;
-    }
-    else
-    {
-        cfg.Trigger1Mode = KMOT_TrigDisabled;
-        cfg.Trigger1Polarity = KMOT_TrigPolarityHigh;
-        cfg.Trigger2Mode = KMOT_TrigDisabled;
-        cfg.Trigger2Polarity = KMOT_TrigPolarityHigh;
-    }
+    cfg.Trigger1Mode = static_cast<KMOT_TriggerPortMode>(requested.trigger1Mode);
+    cfg.Trigger1Polarity = static_cast<KMOT_TriggerPortPolarity>(requested.trigger1Polarity);
+    cfg.Trigger2Mode = static_cast<KMOT_TriggerPortMode>(requested.trigger2Mode);
+    cfg.Trigger2Polarity = static_cast<KMOT_TriggerPortPolarity>(requested.trigger2Polarity);
 
-    params.TriggerStartPositionFwd = m_trig.startPosFwd;
-    params.TriggerIntervalFwd = m_trig.intervalFwd;
-    params.TriggerPulseCountFwd = m_trig.pulseCountFwd;
-    params.TriggerStartPositionRev = m_trig.startPosRev;
-    params.TriggerIntervalRev = m_trig.intervalRev;
-    params.TriggerPulseCountRev = m_trig.pulseCountRev;
-    params.TriggerPulseWidth = pulseWidth;
-    params.CycleCount = m_trig.cycleCount;
+    params.TriggerStartPositionFwd = requested.startPosFwd;
+    params.TriggerIntervalFwd = requested.intervalFwd;
+    params.TriggerPulseCountFwd = requested.pulseCountFwd;
+    params.TriggerStartPositionRev = requested.startPosRev;
+    params.TriggerIntervalRev = requested.intervalRev;
+    params.TriggerPulseCountRev = requested.pulseCountRev;
+    params.TriggerPulseWidth = requested.pulseWidthUs;
+    params.CycleCount = requested.cycleCount;
 
-    short err = BDC_SetTriggerConfigParamsBlock(m_serialCStr, (short)channel, &cfg);
-    if (!okOrLog("BDC_SetTriggerConfigParamsBlock", m_serial, err, channel, errOut))
+    // Keep both outputs disabled until all positional parameters have been
+    // accepted. This prevents stale parameters from becoming active.
+    if (!disableTrigger(channel, errOut))
         return false;
 
-    err = BDC_SetTriggerParamsBlock(m_serialCStr, (short)channel, &params);
+    short err = BDC_SetTriggerParamsBlock(m_serialCStr, (short)channel, &params);
     if (!okOrLog("BDC_SetTriggerParamsBlock", m_serial, err, channel, errOut))
         return false;
 
+    err = BDC_SetTriggerConfigParamsBlock(m_serialCStr, (short)channel, &cfg);
+    if (!okOrLog("BDC_SetTriggerConfigParamsBlock", m_serial, err, channel, errOut))
+    {
+        short ignored = 0;
+        disableTrigger(channel, &ignored);
+        return false;
+    }
+
+    m_trig = requested;
     if (errOut) *errOut = 0;
     return true;
 }
@@ -479,6 +786,9 @@ bool BDCStage::applyTriggerConfig(unsigned channel, short* errOut)
 bool BDCStage::disableTrigger(unsigned channel, short* errOut)
 {
     qDebug() << "BDCStage::disableTrigger serial=" << m_serialCStr << "ch=" << channel;
+
+    if (!validateReady(channel, errOut))
+        return false;
 
     KMOT_TriggerConfig cfg = {};
     cfg.Trigger1Mode = KMOT_TrigDisabled;
@@ -490,6 +800,7 @@ bool BDCStage::disableTrigger(unsigned channel, short* errOut)
     if (!okOrLog("BDC_SetTriggerConfigParamsBlock", m_serial, err, channel, errOut))
         return false;
 
+    m_trig.enabled = false;
     if (errOut) *errOut = 0;
     return true;
 }
@@ -508,18 +819,23 @@ static bool isHomedFromStatus(uint32_t statusBits)
     return (statusBits & HOMED_MASK) != 0;
 }
 
-bool BDCStage::waitUntilIdle(unsigned channel, int timeoutMs, short* errOut)
+bool BDCStage::waitUntilIdle(unsigned channel, int32_t targetPos, int timeoutMs, short* errOut)
 {
+    if (!validateReady(channel, errOut))
+        return false;
+
     const auto t0 = std::chrono::steady_clock::now();
-    int32_t lastPos = getPosition(channel);
+    int32_t lastPos = getPosition(channel, errOut);
     int stableCount = 0;
+    bool seenMoving = false;
 
     while (true)
     {
         uint32_t bits = (uint32_t)BDC_GetStatusBits(m_serialCStr, (short)channel);
-        int32_t pos = getPosition(channel);
+        int32_t pos = getPosition(channel, errOut);
 
         const bool moving = isMovingFromStatus(bits);
+        if (moving) seenMoving = true;
         if (!moving)
         {
             if (pos == lastPos) stableCount++;
@@ -527,8 +843,28 @@ bool BDCStage::waitUntilIdle(unsigned channel, int timeoutMs, short* errOut)
 
             if (stableCount >= 5)
             {
-                if (errOut) *errOut = 0;
-                return true;
+                const int64_t positionError = static_cast<int64_t>(pos) - static_cast<int64_t>(targetPos);
+                const double positionErrorUm = std::abs(
+                    static_cast<double>(positionError) * factor_um[channelIndex(channel)]);
+                if (positionErrorUm <= kPositionToleranceUm)
+                {
+                    if (errOut) *errOut = 0;
+                    return true;
+                }
+
+                if (!seenMoving && stableCount < 20)
+                {
+                    lastPos = pos;
+                    sleepMs(50);
+                    continue;
+                }
+
+                qDebug() << "BDCStage::waitUntilIdle target not reached serial=" << m_serialCStr
+                    << "ch=" << channel
+                    << "target=" << targetPos
+                    << "actual=" << pos;
+                if (errOut) *errOut = kErrTargetNotReached;
+                return false;
             }
         }
         else
@@ -546,7 +882,7 @@ bool BDCStage::waitUntilIdle(unsigned channel, int timeoutMs, short* errOut)
                 << "ch=" << channel
                 << "lastPos=" << lastPos
                 << "statusBits=0x" << QString::number(bits, 16);
-            if (errOut) *errOut = -1;
+            if (errOut) *errOut = kErrTimeout;
             return false;
         }
 
@@ -556,7 +892,11 @@ bool BDCStage::waitUntilIdle(unsigned channel, int timeoutMs, short* errOut)
 
 bool BDCStage::waitUntilHomed(unsigned channel, int timeoutMs, short* errOut)
 {
+    if (!validateReady(channel, errOut))
+        return false;
+
     const auto t0 = std::chrono::steady_clock::now();
+    int idleWithoutHomeCount = 0;
 
     while (true)
     {
@@ -570,6 +910,22 @@ bool BDCStage::waitUntilHomed(unsigned channel, int timeoutMs, short* errOut)
             return true;
         }
 
+        if (!homed && !moving)
+        {
+            ++idleWithoutHomeCount;
+            if (idleWithoutHomeCount >= 40)
+            {
+                qDebug() << "BDCStage::waitUntilHomed stopped before homing completed serial=" << m_serialCStr
+                    << "ch=" << channel;
+                if (errOut) *errOut = kErrTargetNotReached;
+                return false;
+            }
+        }
+        else
+        {
+            idleWithoutHomeCount = 0;
+        }
+
         const auto now = std::chrono::steady_clock::now();
         const int elapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
         if (elapsed > timeoutMs)
@@ -577,7 +933,7 @@ bool BDCStage::waitUntilHomed(unsigned channel, int timeoutMs, short* errOut)
             qDebug() << "BDCStage::waitUntilHomed TIMEOUT serial=" << m_serialCStr
                 << "ch=" << channel
                 << "statusBits=0x" << QString::number(bits, 16);
-            if (errOut) *errOut = -1;
+            if (errOut) *errOut = kErrTimeout;
             return false;
         }
 
