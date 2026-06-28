@@ -95,7 +95,7 @@ bool isCloseRelative(double actual, double expected, double relTolerance)
     if (!std::isfinite(actual) || !std::isfinite(expected))
         return false;
 
-    const double scale = (std::max)(1.0, std::abs(expected));
+    const double scale = (std::max)(std::numeric_limits<double>::epsilon(), std::abs(expected));
     return std::abs(actual - expected) <= scale * relTolerance;
 }
 

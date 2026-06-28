@@ -1,6 +1,16 @@
 #ifndef THORLABSKINESISPLUGIN_H
 #define THORLABSKINESISPLUGIN_H
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4005)
+#endif
+
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
+#include <cmath>
+
 #include "thorlabsKinesisPlugin_global.h"
 #include "ui_thorlabsKinesisPlugin_UI.h"
 #include "interfaces.h"
@@ -16,6 +26,7 @@
 #include <QString>
 #include <QDebug>
 #include <QThread>
+#include <QStringList>
 
 #include <memory>
 #include <unordered_map>
@@ -25,11 +36,16 @@
 #include <atomic>
 #include <cstddef>
 
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
 class QFrame;
 class QLabel;
 class QLineEdit;
 class QPushButton;
 class QTimer;
+class ThorlabsPositionManagerDialog;
 
 class thorlabsKinesisPlugin : public IScanStage
 {
@@ -45,6 +61,16 @@ public:
 
     thorlabsKinesisPlugin();
     ~thorlabsKinesisPlugin();
+
+    struct AxisInfo
+    {
+        int globalAxisID = 0;
+        QString axisName;
+        QString serial;
+        double minimumTravelUm = 0.0;
+        double maximumTravelUm = 0.0;
+        bool travelLimitsValid = false;
+    };
 
     // hardware interface
     virtual bool detect() override;
@@ -85,6 +111,18 @@ public:
     bool executeScanJob(const ScanJob& job) override;
     bool abortScanJob() override;
 
+    QVector<AxisInfo> getAxisInfo() const;
+    QStringList getPositionConfigNames() const;
+    QString getActivePositionConfigName() const;
+    bool getPositionConfig(const QString& name, QVector<int>& globalAxisIDs,
+        QVector<double>& positionsUm) const;
+    bool savePositionConfig(const QString& name, const QVector<int>& globalAxisIDs,
+        const QVector<double>& positionsUm);
+    bool removePositionConfig(const QString& name);
+    Q_INVOKABLE bool choosePositionConfig(const QString& name);
+    Q_INVOKABLE bool goToPositionConfig();
+    Q_INVOKABLE bool goToPositionConfig(const QString& name);
+
     // legacy methods kept (stubs)
     void setHWSerialNr(QString* serialNr);
     void setHWSerialNr(QString serialNr);
@@ -99,6 +137,8 @@ private:
         QString baseSerial;  // BDC base serial for M30XY; KVS serial for Z
         int channel = 1;     // 1/2 for M30XY
         bool isM30xy = false;
+        int globalAxisId = 0; // public/backend axis ID, 1-based and contiguous
+        QString axisName;
         QString display;
     };
 
@@ -122,6 +162,13 @@ private:
         QPushButton* disableTriggerButton = nullptr;
     };
 
+    struct PositionConfig
+    {
+        QString name;
+        QVector<int> globalAxisIDs;
+        QVector<double> positionsUm;
+    };
+
     void initGUI();
     void refreshAxisUi();
     void rebuildAxisFrames();
@@ -136,10 +183,24 @@ private:
     void waitForMotionToFinish();
     void closeDevices();
     bool disableAllTriggers(bool force = false);
+    bool chooseAxesForInitialization();
+    void assignGlobalAxisIds(QVector<AxisEntry>& axes) const;
+    QString axisKey(const AxisEntry& axis) const;
+    QString axisDisplayText(const AxisEntry& axis) const;
+    void refreshAxisCombo();
+    int axisIndexFromGlobalId(int globalAxisId) const;
+    int axisIndexFromPublicId(int id) const;
+    bool resolveAxisRequest(const char* axes, QVector<int>& axisIndices) const;
+    bool axisTravelLimitsUm(const AxisEntry& axis, double& minUm, double& maxUm) const;
+    bool moveToAxisIndex(double posUm, int axisIndex);
+    bool moveStepsAxisIndex(double stepsUm, int axisIndex);
     bool moveAxesCoordinated(const double* values, const char* axes, bool relative);
+    bool moveAxesByGlobalIds(const double* values, const int* globalAxisIds, int axisCount, bool relative);
     bool moveToAxisCodes(const double* positions, const int* axes, std::size_t count);
     bool executeScanLine(const LaserLine& line, const ScanJob& job);
     bool configureLineTrigger(BDCStage* stage, unsigned channel, double startUm, double endUm, const ScanJob& job);
+    void openPositionManager();
+    int positionConfigIndex(const QString& name) const;
 
     BDCStage* m30xyForBase(const QString& baseSerial);
     KVSStage* kvsForSerial(const QString& serial);
@@ -157,14 +218,19 @@ private:
     QString className;
     QString xmlName;
 
+    QVector<AxisEntry> m_detectedAxes;
     QVector<AxisEntry> m_axes;
     QVector<AxisUi> m_axisUi;
+    QSet<QString> m_selectedAxisKeys;
+    QVector<PositionConfig> m_positionConfigs;
+    int m_activePositionConfigIndex = -1;
+    ThorlabsPositionManagerDialog* m_positionManagerWindow = nullptr;
 
     std::unordered_map<std::string, std::unique_ptr<BDCStage>> m_m30xy;
     std::unordered_map<std::string, std::unique_ptr<KVSStage>> m_kvs;
     std::mutex m_deviceMapMutex;
 
-    std::array<double, 3> m_lastPositionsUm{ 0.0, 0.0, 0.0 };
+    std::vector<double> m_lastPositionsUm;
     QThread* m_motionThread = nullptr;
     QTimer* m_positionRefreshTimer = nullptr;
     bool m_guiInitialized = false;
@@ -181,6 +247,7 @@ public slots:
     void slot_stopMotor();
     void slot_moveTo();
     void slot_getPosition();
+    void slot_openPositionManager();
 
     void slot_applyTrigger();
     void slot_disableTrigger();

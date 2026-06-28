@@ -33,6 +33,13 @@
                             </widget>
                         </item>
                         <item>
+                            <widget class="QPushButton" name="pushButton_positionManager">
+                                <property name="text">
+                                    <string>Position Manager</string>
+                                </property>
+                            </widget>
+                        </item>
+                        <item>
                             <widget class="QPushButton" name="pushButton_logger">
                                 <property name="text">
                                     <string>Open Logger</string>

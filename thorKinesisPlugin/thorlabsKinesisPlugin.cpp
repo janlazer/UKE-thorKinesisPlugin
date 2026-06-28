@@ -1,3 +1,11 @@
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4005)
+#endif
+
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
 #include <cmath>
 #include <limits>
 #include <string>
@@ -5,13 +13,19 @@
 #include <vector>
 
 #include "thorlabsKinesisPlugin.h"
+#include "ThorlabsPositionManagerDialog.h"
 
+#include <QCheckBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFont>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QListWidgetItem>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPushButton>
@@ -21,6 +35,10 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <array>
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 namespace
 {
@@ -158,6 +176,11 @@ thorlabsKinesisPlugin::~thorlabsKinesisPlugin()
 {
     release();
 
+    if (m_positionManagerWindow)
+    {
+        delete m_positionManagerWindow;
+        m_positionManagerWindow = nullptr;
+    }
     if (dockLogger)
         delete dockLogger;
     if (dock && !dock->parent())
@@ -220,6 +243,7 @@ void thorlabsKinesisPlugin::setMotionUiBusy(bool busy)
     ui.pushButton_applyTrigger->setEnabled(!busy);
     ui.pushButton_disableTrigger->setEnabled(!busy);
     ui.pushButton_stop->setEnabled(busy || isInitialized());
+    ui.pushButton_positionManager->setEnabled(!busy && isInitialized());
 
     const bool axisControlsEnabled = !busy && isInitialized();
     for (int id = 0; id < m_axisUi.size(); ++id)
@@ -241,7 +265,7 @@ void thorlabsKinesisPlugin::startMotionTask(const QString& operation, std::funct
 {
     if (m_motionThread)
     {
-        QMessageBox::warning(dock, "Thorlabs", "Eine Bewegung läuft bereits.");
+        QMessageBox::warning(dock, "Thorlabs", "A motion task is already running.");
         return;
     }
 
@@ -263,7 +287,7 @@ void thorlabsKinesisPlugin::startMotionTask(const QString& operation, std::funct
         if (!ok)
         {
             QMetaObject::invokeMethod(this, [this, operation]() {
-                QMessageBox::warning(dock, "Thorlabs", operation + " fehlgeschlagen.");
+                QMessageBox::warning(dock, "Thorlabs", operation + " failed.");
             }, Qt::QueuedConnection);
         }
     });
@@ -331,6 +355,214 @@ bool thorlabsKinesisPlugin::disableAllTriggers(bool force)
     }
 
     return ok;
+}
+
+QString thorlabsKinesisPlugin::axisKey(const AxisEntry& axis) const
+{
+    return QString("%1:%2:%3")
+        .arg(axis.isM30xy ? QStringLiteral("M30XY") : QStringLiteral("KVS"))
+        .arg(axis.baseSerial)
+        .arg(axis.channel);
+}
+
+QString thorlabsKinesisPlugin::axisDisplayText(const AxisEntry& axis) const
+{
+    if (axis.globalAxisId > 0)
+        return QString("#%1  %2").arg(axis.globalAxisId).arg(axis.display);
+    return axis.display;
+}
+
+void thorlabsKinesisPlugin::assignGlobalAxisIds(QVector<AxisEntry>& axes) const
+{
+    for (int i = 0; i < axes.size(); ++i)
+        axes[i].globalAxisId = i + 1;
+}
+
+void thorlabsKinesisPlugin::refreshAxisCombo()
+{
+    QSignalBlocker blocker(ui.comboBox_devices);
+    ui.comboBox_devices->clear();
+    for (const AxisEntry& axis : m_axes)
+        ui.comboBox_devices->addItem(axisDisplayText(axis));
+}
+
+int thorlabsKinesisPlugin::axisIndexFromGlobalId(int globalAxisId) const
+{
+    if (globalAxisId < 1)
+        return -1;
+
+    for (int i = 0; i < m_axes.size(); ++i)
+    {
+        if (m_axes[i].globalAxisId == globalAxisId)
+            return i;
+    }
+    return -1;
+}
+
+int thorlabsKinesisPlugin::axisIndexFromPublicId(int id) const
+{
+    // Legacy IStage default: id=0 means first stage. Backend/global IDs are
+    // QMotion-style and start at 1.
+    if (id == 0)
+        return m_axes.isEmpty() ? -1 : 0;
+    return axisIndexFromGlobalId(id);
+}
+
+bool thorlabsKinesisPlugin::resolveAxisRequest(const char* axes, QVector<int>& axisIndices) const
+{
+    axisIndices.clear();
+
+    QString req = axes ? QString::fromLatin1(axes).trimmed() : QString();
+    if (req.isEmpty())
+    {
+        for (int i = 0; i < m_axes.size(); ++i)
+            axisIndices.append(i);
+        return !axisIndices.isEmpty();
+    }
+
+    const QString lower = req.toLower();
+    bool hasAxisLetters = false;
+    bool hasDigits = false;
+    for (const QChar ch : lower)
+    {
+        if (ch == QChar('x') || ch == QChar('y') || ch == QChar('z'))
+            hasAxisLetters = true;
+        else if (ch.isDigit())
+            hasDigits = true;
+    }
+
+    QSet<int> seen;
+    if (hasAxisLetters && !hasDigits)
+    {
+        for (const QChar ch : lower)
+        {
+            if (ch.isSpace() || ch == QChar(',') || ch == QChar(';'))
+                continue;
+
+            const int axisIndex = findAxisIndexByName(ch);
+            if (axisIndex < 0 || seen.contains(axisIndex))
+                return false;
+            seen.insert(axisIndex);
+            axisIndices.append(axisIndex);
+        }
+        return !axisIndices.isEmpty();
+    }
+
+    for (const QChar ch : lower)
+    {
+        if (ch.isSpace() || ch == QChar(',') || ch == QChar(';'))
+            continue;
+        if (!ch.isDigit())
+            return false;
+
+        const int globalAxisId = ch.digitValue();
+        const int axisIndex = axisIndexFromGlobalId(globalAxisId);
+        if (axisIndex < 0 || seen.contains(axisIndex))
+            return false;
+        seen.insert(axisIndex);
+        axisIndices.append(axisIndex);
+    }
+
+    return !axisIndices.isEmpty();
+}
+
+bool thorlabsKinesisPlugin::axisTravelLimitsUm(const AxisEntry& axis, double& minUm, double& maxUm) const
+{
+    if (axis.isM30xy)
+    {
+        minUm = -15000.0;
+        maxUm = 15000.0;
+        return true;
+    }
+
+    minUm = 0.0;
+    maxUm = 30000.0;
+    return true;
+}
+
+bool thorlabsKinesisPlugin::chooseAxesForInitialization()
+{
+    if (m_detectedAxes.isEmpty())
+        return false;
+
+    QDialog dialog(dock);
+    dialog.setWindowTitle("Select Thorlabs Axes");
+    dialog.setModal(true);
+
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* infoLabel = new QLabel(
+        "Select the Thorlabs axes that should be initialized and used by this plugin.",
+        &dialog);
+    infoLabel->setWordWrap(true);
+    layout->addWidget(infoLabel);
+
+    auto* list = new QListWidget(&dialog);
+    list->setSelectionMode(QAbstractItemView::NoSelection);
+    layout->addWidget(list);
+
+    const bool hasPreviousSelection = !m_selectedAxisKeys.isEmpty();
+    for (int i = 0; i < m_detectedAxes.size(); ++i)
+    {
+        const AxisEntry& axis = m_detectedAxes[i];
+        auto* item = new QListWidgetItem(axis.display, list);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setData(Qt::UserRole, i);
+        const bool checked = !hasPreviousSelection || m_selectedAxisKeys.contains(axisKey(axis));
+        item->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
+    }
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+
+    QVector<AxisEntry> selectedAxes;
+    QSet<QString> selectedKeys;
+    for (int row = 0; row < list->count(); ++row)
+    {
+        const QListWidgetItem* item = list->item(row);
+        if (!item || item->checkState() != Qt::Checked)
+            continue;
+
+        const int detectedIndex = item->data(Qt::UserRole).toInt();
+        if (detectedIndex < 0 || detectedIndex >= m_detectedAxes.size())
+            continue;
+
+        AxisEntry axis = m_detectedAxes[detectedIndex];
+        selectedKeys.insert(axisKey(axis));
+        selectedAxes.append(axis);
+    }
+
+    if (selectedAxes.isEmpty())
+    {
+        QMessageBox::warning(dock, "Thorlabs", "Please select at least one axis.");
+        return false;
+    }
+
+    assignGlobalAxisIds(selectedAxes);
+    m_selectedAxisKeys = selectedKeys;
+    m_axes = selectedAxes;
+    refreshAxisCombo();
+    rebuildAxisFrames();
+    ui.comboBox_devices->setCurrentIndex(0);
+    refreshAxisUi();
+    if (m_positionManagerWindow)
+        m_positionManagerWindow->refresh();
+
+    qDebug() << className << "::chooseAxesForInitialization selected axes=" << m_axes.size();
+    for (const AxisEntry& axis : m_axes)
+    {
+        qDebug() << className << "::chooseAxesForInitialization axis"
+            << axis.globalAxisId
+            << axis.display
+            << "serial=" << axis.baseSerial
+            << "channel=" << axis.channel;
+    }
+
+    return true;
 }
 
 void thorlabsKinesisPlugin::clearAxisFrames()
@@ -415,7 +647,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
 
     if (m_axes.isEmpty())
     {
-        auto* emptyLabel = new QLabel("Keine Achsen erkannt. Bitte Refresh / Detect ausfuehren.",
+        auto* emptyLabel = new QLabel("No axes detected. Please run Refresh / Detect.",
             ui.scrollAreaWidgetContents_axes);
         emptyLabel->setAlignment(Qt::AlignCenter);
         emptyLabel->setWordWrap(true);
@@ -442,7 +674,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         frameLayout->setContentsMargins(10, 10, 10, 10);
         frameLayout->setSpacing(8);
 
-        axisUi.title = new QLabel(ax.display, frame);
+        axisUi.title = new QLabel(axisDisplayText(ax), frame);
         QFont titleFont = axisUi.title->font();
         titleFont.setBold(true);
         axisUi.title->setFont(titleFont);
@@ -624,8 +856,9 @@ bool thorlabsKinesisPlugin::detect()
     closeDevices();
     setInitialized(false);
 
+    m_detectedAxes.clear();
     m_axes.clear();
-    ui.comboBox_devices->clear();
+    refreshAxisCombo();
 
     const auto devices = detectKinesisDevices();
 
@@ -645,8 +878,9 @@ bool thorlabsKinesisPlugin::detect()
             z.baseSerial = serial;
             z.channel = 1;
             z.isM30xy = false;
+            z.axisName = QStringLiteral("Z");
             z.display = QString("KVS30 Z (S:%1)").arg(serial);
-            m_axes.push_back(z);
+            m_detectedAxes.push_back(z);
 
             qDebug() << qPrintable(className + "::" + methodName)
                 << "- detected KVS30 serial" << serial;
@@ -667,28 +901,31 @@ bool thorlabsKinesisPlugin::detect()
             x.baseSerial = serial;
             x.channel = 1;
             x.isM30xy = true;
+            x.axisName = QStringLiteral("X");
             x.display = QString("M30XY X (Base:%1 ch1)").arg(serial);
-            m_axes.push_back(x);
+            m_detectedAxes.push_back(x);
 
             AxisEntry y;
             y.baseSerial = serial;
             y.channel = 2;
             y.isM30xy = true;
+            y.axisName = QStringLiteral("Y");
             y.display = QString("M30XY Y (Base:%1 ch2)").arg(serial);
-            m_axes.push_back(y);
+            m_detectedAxes.push_back(y);
 
             qDebug() << qPrintable(className + "::" + methodName)
                 << "- detected M30XY base serial" << serial;
         }
     }
 
-    for (const auto& ax : m_axes)
-        ui.comboBox_devices->addItem(ax.display);
+    m_axes = m_detectedAxes;
+    assignGlobalAxisIds(m_axes);
+    refreshAxisCombo();
 
-    setDetected(!m_axes.isEmpty());
+    setDetected(!m_detectedAxes.isEmpty());
     rebuildAxisFrames();
 
-    if (isDetected())
+    if (isDetected() && !m_axes.isEmpty())
     {
         ui.comboBox_devices->setCurrentIndex(0);
         refreshAxisUi();
@@ -696,7 +933,7 @@ bool thorlabsKinesisPlugin::detect()
 
     qDebug() << qPrintable(className + "::" + methodName)
         << "- done detected=" << isDetected()
-        << "axes=" << m_axes.size();
+        << "detectedAxes=" << m_detectedAxes.size();
 
     return isDetected();
 }
@@ -706,9 +943,19 @@ bool thorlabsKinesisPlugin::initialize()
     const QString methodName = "initialize()";
     qDebug() << qPrintable(className + "::" + methodName) << "- start";
 
-    if (!isDetected() || m_axes.isEmpty())
+    if (isInitialized() && !m_axes.isEmpty())
+        return true;
+
+    if (!isDetected() || m_detectedAxes.isEmpty())
     {
         qDebug() << qPrintable(className + "::" + methodName) << "- not detected / no axes";
+        return false;
+    }
+
+    if (!chooseAxesForInitialization())
+    {
+        qDebug() << qPrintable(className + "::" + methodName) << "- axis selection cancelled or empty";
+        setInitialized(false);
         return false;
     }
 
@@ -766,12 +1013,17 @@ bool thorlabsKinesisPlugin::release()
     waitForMotionToFinish();
     disableAllTriggers();
     closeDevices();
+    m_detectedAxes.clear();
     m_axes.clear();
+    m_activePositionConfigIndex = -1;
     if (dock)
     {
-        ui.comboBox_devices->clear();
+        refreshAxisCombo();
         rebuildAxisFrames();
     }
+
+    if (m_positionManagerWindow)
+        m_positionManagerWindow->refresh();
 
     setInitialized(false);
     setDetected(false);
@@ -784,17 +1036,23 @@ bool thorlabsKinesisPlugin::release()
 
 bool thorlabsKinesisPlugin::moveTo(double pos, int id)
 {
+    return moveToAxisIndex(pos, axisIndexFromPublicId(id));
+}
+
+bool thorlabsKinesisPlugin::moveToAxisIndex(double pos, int axisIndex)
+{
     const QString methodName = "moveTo(pos_um,id)";
 
-    if (!isInitialized() || !std::isfinite(pos) || id < 0 || id >= m_axes.size())
+    if (!isInitialized() || !std::isfinite(pos) || axisIndex < 0 || axisIndex >= m_axes.size())
         return false;
     if (m_motionTaskActive.load() && m_stopRequested.load())
         return false;
 
-    AxisEntry& ax = m_axes[id];
+    AxisEntry& ax = m_axes[axisIndex];
 
     qDebug() << qPrintable(className + "::" + methodName)
-        << "- id" << id
+        << "- axisIndex" << axisIndex
+        << "globalAxisId" << ax.globalAxisId
         << "baseSerial" << ax.baseSerial
         << "ch" << ax.channel
         << "pos_um" << pos;
@@ -823,9 +1081,25 @@ bool thorlabsKinesisPlugin::moveTo(double* pos, const char* axes)
 
 bool thorlabsKinesisPlugin::moveTo(const double* positions, const int* axes, int axisCount)
 {
-    if (axisCount < 1)
+    if (!positions || !axes || axisCount < 1)
         return false;
-    return moveToAxisCodes(positions, axes, static_cast<std::size_t>(axisCount));
+
+    if (moveAxesByGlobalIds(positions, axes, axisCount, false))
+        return true;
+
+    bool allLegacyAxisCodes = true;
+    for (int i = 0; i < axisCount; ++i)
+    {
+        if (axes[i] != 1 && axes[i] != 2 && axes[i] != 4)
+        {
+            allLegacyAxisCodes = false;
+            break;
+        }
+    }
+
+    return allLegacyAxisCodes
+        ? moveToAxisCodes(positions, axes, static_cast<std::size_t>(axisCount))
+        : false;
 }
 
 bool thorlabsKinesisPlugin::moveToAxisCodes(const double* positions, const int* axes, std::size_t count)
@@ -1086,8 +1360,8 @@ bool thorlabsKinesisPlugin::moveAxesCoordinated(const double* values, const char
     if (!isInitialized() || !values || !axes)
         return false;
 
-    const QString req = QString::fromLatin1(axes).toLower();
-    if (req.isEmpty())
+    QVector<int> axisIndices;
+    if (!resolveAxisRequest(axes, axisIndices))
         return false;
 
     if (!m_motionTaskActive.load())
@@ -1104,19 +1378,16 @@ bool thorlabsKinesisPlugin::moveAxesCoordinated(const double* values, const char
     };
 
     std::vector<PendingMove> pending;
-    pending.reserve(static_cast<std::size_t>(req.size()));
-    QSet<QChar> seenAxes;
+    pending.reserve(static_cast<std::size_t>(axisIndices.size()));
 
     // Resolve and convert every target before the first controller receives a
     // movement command. Relative targets are based on one common snapshot.
-    for (int i = 0; i < req.size(); ++i)
+    for (int i = 0; i < axisIndices.size(); ++i)
     {
-        const QChar axisName = req[i];
-        if (seenAxes.contains(axisName) || !std::isfinite(values[i]))
+        if (!std::isfinite(values[i]))
             return false;
-        seenAxes.insert(axisName);
 
-        const int id = findAxisIndexByName(axisName);
+        const int id = axisIndices[i];
         if (id < 0)
             return false;
 
@@ -1228,19 +1499,55 @@ bool thorlabsKinesisPlugin::moveAxesCoordinated(const double* values, const char
     return true;
 }
 
+bool thorlabsKinesisPlugin::moveAxesByGlobalIds(const double* values,
+    const int* globalAxisIds, int axisCount, bool relative)
+{
+    if (!values || !globalAxisIds || axisCount < 1 || axisCount > 9)
+        return false;
+
+    std::string encodedAxisIds;
+    encodedAxisIds.reserve(static_cast<std::size_t>(axisCount) * 2);
+    QSet<int> seen;
+    for (int i = 0; i < axisCount; ++i)
+    {
+        const int globalAxisId = globalAxisIds[i];
+        if (!std::isfinite(values[i])
+            || globalAxisId < 1
+            || globalAxisId > 9
+            || seen.contains(globalAxisId)
+            || axisIndexFromGlobalId(globalAxisId) < 0)
+        {
+            return false;
+        }
+
+        seen.insert(globalAxisId);
+        if (!encodedAxisIds.empty())
+            encodedAxisIds += '\n';
+        encodedAxisIds += static_cast<char>('0' + globalAxisId);
+    }
+
+    return moveAxesCoordinated(values, encodedAxisIds.c_str(), relative);
+}
+
 bool thorlabsKinesisPlugin::moveSteps(double steps, int id)
+{
+    return moveStepsAxisIndex(steps, axisIndexFromPublicId(id));
+}
+
+bool thorlabsKinesisPlugin::moveStepsAxisIndex(double steps, int axisIndex)
 {
     const QString methodName = "moveSteps(delta_um,id)";
 
-    if (!isInitialized() || !std::isfinite(steps) || id < 0 || id >= m_axes.size())
+    if (!isInitialized() || !std::isfinite(steps) || axisIndex < 0 || axisIndex >= m_axes.size())
         return false;
     if (m_motionTaskActive.load() && m_stopRequested.load())
         return false;
 
-    AxisEntry& ax = m_axes[id];
+    AxisEntry& ax = m_axes[axisIndex];
 
     qDebug() << qPrintable(className + "::" + methodName)
-        << "- id" << id
+        << "- axisIndex" << axisIndex
+        << "globalAxisId" << ax.globalAxisId
         << "baseSerial" << ax.baseSerial
         << "ch" << ax.channel
         << "delta_um" << steps;
@@ -1262,7 +1569,7 @@ bool thorlabsKinesisPlugin::moveSteps(double steps, int id)
     return stage->isOpen() && stage->moveRelUm(steps, &err);
 }
 
-// Zusatzfunktion fuer mehrere relative Achsen gleichzeitig, z.B. "xyz"
+// Helper for moving several relative axes at once, e.g. "xyz"
 bool thorlabsKinesisPlugin::moveSteps(double* steps, const char* axes)
 {
     return moveAxesCoordinated(steps, axes, true);
@@ -1271,6 +1578,21 @@ bool thorlabsKinesisPlugin::moveSteps(double* steps, const char* axes)
 bool thorlabsKinesisPlugin::moveSteps(const double* steps, const int* axes, int axisCount)
 {
     if (!steps || !axes || axisCount < 1)
+        return false;
+
+    if (moveAxesByGlobalIds(steps, axes, axisCount, true))
+        return true;
+
+    bool allLegacyAxisCodes = true;
+    for (int i = 0; i < axisCount; ++i)
+    {
+        if (axes[i] != 1 && axes[i] != 2 && axes[i] != 4)
+        {
+            allLegacyAxisCodes = false;
+            break;
+        }
+    }
+    if (!allLegacyAxisCodes)
         return false;
 
     std::string axisNames;
@@ -1297,29 +1619,178 @@ bool thorlabsKinesisPlugin::moveSteps(const double* steps, const int* axes, int 
 
 double* thorlabsKinesisPlugin::getPosition(const char* axes)
 {
-    m_lastPositionsUm = { 0.0, 0.0, 0.0 };
-
-    QString req = axes ? QString::fromLatin1(axes).toLower() : QString("xyz");
-    if (req.isEmpty())
-        req = "xyz";
-
-    for (int i = 0; i < req.size() && i < 3; ++i)
+    QVector<int> axisIndices;
+    if (!resolveAxisRequest(axes, axisIndices))
     {
-        const int id = findAxisIndexByName(req[i]);
+        m_lastPositionsUm.clear();
+        return nullptr;
+    }
+
+    m_lastPositionsUm.assign(static_cast<std::size_t>(axisIndices.size()), 0.0);
+    for (int i = 0; i < axisIndices.size(); ++i)
+    {
+        const int id = axisIndices[i];
         if (id < 0)
             continue;
 
         double valueUm = 0.0;
         if (readAxisPositionUm(id, valueUm))
-            m_lastPositionsUm[i] = valueUm;
+            m_lastPositionsUm[static_cast<std::size_t>(i)] = valueUm;
     }
 
-    return m_lastPositionsUm.data();
+    return m_lastPositionsUm.empty() ? nullptr : m_lastPositionsUm.data();
 }
 
 double* thorlabsKinesisPlugin::getPosition()
 {
-    return getPosition("xyz");
+    return getPosition(nullptr);
+}
+
+QVector<thorlabsKinesisPlugin::AxisInfo> thorlabsKinesisPlugin::getAxisInfo() const
+{
+    QVector<AxisInfo> axes;
+    axes.reserve(m_axes.size());
+
+    for (const AxisEntry& axis : m_axes)
+    {
+        double minUm = 0.0;
+        double maxUm = 0.0;
+        const bool limitsValid = axisTravelLimitsUm(axis, minUm, maxUm);
+        axes.append({ axis.globalAxisId, axisDisplayText(axis), axis.baseSerial,
+            minUm, maxUm, limitsValid });
+    }
+
+    return axes;
+}
+
+int thorlabsKinesisPlugin::positionConfigIndex(const QString& name) const
+{
+    const QString normalized = name.trimmed();
+    for (int i = 0; i < m_positionConfigs.size(); ++i)
+    {
+        if (m_positionConfigs[i].name.compare(normalized, Qt::CaseInsensitive) == 0)
+            return i;
+    }
+    return -1;
+}
+
+QStringList thorlabsKinesisPlugin::getPositionConfigNames() const
+{
+    QStringList names;
+    for (const PositionConfig& config : m_positionConfigs)
+        names.append(config.name);
+    return names;
+}
+
+QString thorlabsKinesisPlugin::getActivePositionConfigName() const
+{
+    if (m_activePositionConfigIndex < 0
+        || m_activePositionConfigIndex >= m_positionConfigs.size())
+        return QString();
+    return m_positionConfigs[m_activePositionConfigIndex].name;
+}
+
+bool thorlabsKinesisPlugin::getPositionConfig(const QString& name,
+    QVector<int>& globalAxisIDs, QVector<double>& positionsUm) const
+{
+    globalAxisIDs.clear();
+    positionsUm.clear();
+
+    const int index = positionConfigIndex(name);
+    if (index < 0)
+        return false;
+
+    globalAxisIDs = m_positionConfigs[index].globalAxisIDs;
+    positionsUm = m_positionConfigs[index].positionsUm;
+    return true;
+}
+
+bool thorlabsKinesisPlugin::savePositionConfig(const QString& name,
+    const QVector<int>& globalAxisIDs, const QVector<double>& positionsUm)
+{
+    const QString normalized = name.trimmed();
+    if (normalized.isEmpty()
+        || globalAxisIDs.isEmpty()
+        || globalAxisIDs.size() != positionsUm.size())
+        return false;
+
+    QSet<int> seen;
+    for (int i = 0; i < globalAxisIDs.size(); ++i)
+    {
+        const int globalAxisId = globalAxisIDs[i];
+        if (axisIndexFromGlobalId(globalAxisId) < 0
+            || seen.contains(globalAxisId)
+            || !std::isfinite(positionsUm[i]))
+        {
+            return false;
+        }
+        seen.insert(globalAxisId);
+    }
+
+    PositionConfig config{ normalized, globalAxisIDs, positionsUm };
+    const int existingIndex = positionConfigIndex(normalized);
+    if (existingIndex >= 0)
+    {
+        m_positionConfigs[existingIndex] = config;
+        m_activePositionConfigIndex = existingIndex;
+    }
+    else
+    {
+        m_positionConfigs.append(config);
+        m_activePositionConfigIndex = m_positionConfigs.size() - 1;
+    }
+    return true;
+}
+
+bool thorlabsKinesisPlugin::removePositionConfig(const QString& name)
+{
+    const int removedIndex = positionConfigIndex(name);
+    if (removedIndex < 0)
+        return false;
+
+    m_positionConfigs.removeAt(removedIndex);
+    if (m_positionConfigs.isEmpty())
+        m_activePositionConfigIndex = -1;
+    else if (m_activePositionConfigIndex == removedIndex)
+        m_activePositionConfigIndex = qMin(removedIndex, m_positionConfigs.size() - 1);
+    else if (m_activePositionConfigIndex > removedIndex)
+        --m_activePositionConfigIndex;
+
+    return true;
+}
+
+bool thorlabsKinesisPlugin::choosePositionConfig(const QString& name)
+{
+    const int index = positionConfigIndex(name);
+    if (index < 0)
+        return false;
+    m_activePositionConfigIndex = index;
+    return true;
+}
+
+bool thorlabsKinesisPlugin::goToPositionConfig()
+{
+    if (!isInitialized()
+        || m_activePositionConfigIndex < 0
+        || m_activePositionConfigIndex >= m_positionConfigs.size())
+    {
+        return false;
+    }
+
+    const PositionConfig config = m_positionConfigs[m_activePositionConfigIndex];
+    if (config.globalAxisIDs.isEmpty()
+        || config.globalAxisIDs.size() != config.positionsUm.size())
+        return false;
+
+    return moveAxesByGlobalIds(config.positionsUm.constData(),
+        config.globalAxisIDs.constData(),
+        config.globalAxisIDs.size(),
+        false);
+}
+
+bool thorlabsKinesisPlugin::goToPositionConfig(const QString& name)
+{
+    return choosePositionConfig(name) && goToPositionConfig();
 }
 
 bool thorlabsKinesisPlugin::stop()
@@ -1420,6 +1891,8 @@ void thorlabsKinesisPlugin::initGUI()
 
     connect(ui.pushButton_logger, &QPushButton::clicked,
         this, &thorlabsKinesisPlugin::slot_openLogger, Qt::UniqueConnection);
+    connect(ui.pushButton_positionManager, &QPushButton::clicked,
+        this, &thorlabsKinesisPlugin::slot_openPositionManager, Qt::UniqueConnection);
 
     connect(ui.pushButton_applyTrigger, &QPushButton::clicked,
         this, &thorlabsKinesisPlugin::slot_applyTrigger, Qt::UniqueConnection);
@@ -1483,7 +1956,7 @@ void thorlabsKinesisPlugin::slot_goHome()
         if (ax.isM30xy)
         {
             BDCStage* stage = m30xyForBase(ax.baseSerial);
-            return stage->isOpen() && stage->homeAll(&err);
+            return stage->isOpen() && stage->home(static_cast<unsigned>(ax.channel), &err);
         }
 
         KVSStage* stage = kvsForSerial(ax.baseSerial);
@@ -1497,12 +1970,12 @@ void thorlabsKinesisPlugin::slot_moveStepForward()
     double stepUm = 0.0;
     if (!parseFiniteDouble(ui.lineEdit_step->text(), stepUm) || stepUm <= 0.0)
     {
-        QMessageBox::warning(dock, "Thorlabs", "Bitte eine positive, gültige Schrittweite eingeben.");
+        QMessageBox::warning(dock, "Thorlabs", "Please enter a positive, valid step size.");
         return;
     }
 
     qDebug() << className << "::slot_moveStepForward id" << id << "step_um" << stepUm;
-    startMotionTask("Relative Bewegung", [this, id, stepUm]() { return moveSteps(stepUm, id); });
+    startMotionTask("Relative Motion", [this, id, stepUm]() { return moveStepsAxisIndex(stepUm, id); });
 }
 
 void thorlabsKinesisPlugin::slot_moveStepBackward()
@@ -1511,19 +1984,19 @@ void thorlabsKinesisPlugin::slot_moveStepBackward()
     double stepUm = 0.0;
     if (!parseFiniteDouble(ui.lineEdit_step->text(), stepUm) || stepUm <= 0.0)
     {
-        QMessageBox::warning(dock, "Thorlabs", "Bitte eine positive, gültige Schrittweite eingeben.");
+        QMessageBox::warning(dock, "Thorlabs", "Please enter a positive, valid step size.");
         return;
     }
 
     qDebug() << className << "::slot_moveStepBackward id" << id << "step_um" << stepUm;
-    startMotionTask("Relative Bewegung", [this, id, stepUm]() { return moveSteps(-stepUm, id); });
+    startMotionTask("Relative Motion", [this, id, stepUm]() { return moveStepsAxisIndex(-stepUm, id); });
 }
 
 void thorlabsKinesisPlugin::slot_stopMotor()
 {
     qDebug() << className << "::slot_stopMotor";
     if (!stop())
-        QMessageBox::warning(dock, "Thorlabs", "Nicht alle Achsen konnten gestoppt werden.");
+        QMessageBox::warning(dock, "Thorlabs", "Not all axes could be stopped.");
 
     // Close the narrow race in which a worker passed its cancellation check
     // immediately before the stop request and starts the SDK command just after it.
@@ -1538,12 +2011,12 @@ void thorlabsKinesisPlugin::slot_moveTo()
     double posUm = 0.0;
     if (!parseFiniteDouble(ui.lineEdit_position->text(), posUm))
     {
-        QMessageBox::warning(dock, "Thorlabs", "Bitte eine gültige Zielposition eingeben.");
+        QMessageBox::warning(dock, "Thorlabs", "Please enter a valid target position.");
         return;
     }
 
     qDebug() << className << "::slot_moveTo id" << id << "pos_um" << posUm;
-    startMotionTask("Absolute Bewegung", [this, id, posUm]() { return moveTo(posUm, id); });
+    startMotionTask("Absolute Motion", [this, id, posUm]() { return moveToAxisIndex(posUm, id); });
 }
 
 void thorlabsKinesisPlugin::slot_getPosition()
@@ -1575,6 +2048,30 @@ void thorlabsKinesisPlugin::slot_openLogger()
     dockLogger->raise();
 }
 
+void thorlabsKinesisPlugin::openPositionManager()
+{
+    if (!m_positionManagerWindow)
+    {
+        m_positionManagerWindow = new ThorlabsPositionManagerDialog(this, dock);
+        connect(m_positionManagerWindow, &QObject::destroyed,
+            this, [this]() { m_positionManagerWindow = nullptr; });
+    }
+    else if (!m_positionManagerWindow->isVisible())
+    {
+        m_positionManagerWindow->refresh();
+    }
+
+    m_positionManagerWindow->show();
+    m_positionManagerWindow->raise();
+    m_positionManagerWindow->activateWindow();
+}
+
+void thorlabsKinesisPlugin::slot_openPositionManager()
+{
+    qDebug() << className << "::slot_openPositionManager";
+    openPositionManager();
+}
+
 void thorlabsKinesisPlugin::slot_applyTrigger()
 {
     const int id = ui.comboBox_devices->currentIndex();
@@ -1585,7 +2082,7 @@ void thorlabsKinesisPlugin::slot_applyTrigger()
 
     if (!ax.isM30xy)
     {
-        QMessageBox::warning(dock, "Thorlabs", "Lasertrigger werden ausschließlich über die M30XY-Stage ausgegeben.");
+        QMessageBox::warning(dock, "Thorlabs", "Laser triggers are only output by the M30XY stage.");
         return;
     }
 
@@ -1603,7 +2100,7 @@ void thorlabsKinesisPlugin::slot_applyTrigger()
         || width > 1000000)
     {
         QMessageBox::warning(dock, "Thorlabs",
-            "Ungültige Triggerparameter. Intervall und Anzahl müssen positiv sein; die Pulsbreite muss zwischen 1 und 1000000 µs liegen.");
+            "Invalid trigger parameters. Interval and count must be positive; pulse width must be between 1 and 1000000 us.");
         return;
     }
 
@@ -1612,7 +2109,7 @@ void thorlabsKinesisPlugin::slot_applyTrigger()
     auto* st = m30xyForBase(ax.baseSerial);
     if (!st->isOpen())
     {
-        QMessageBox::warning(dock, "Thorlabs", "Die ausgewählte M30XY-Stage ist nicht geöffnet.");
+        QMessageBox::warning(dock, "Thorlabs", "The selected M30XY stage is not open.");
         return;
     }
 
@@ -1642,7 +2139,7 @@ void thorlabsKinesisPlugin::slot_applyTrigger()
         || triggerFrequencyHz > kMaximumLaserTriggerFrequencyHz + 1e-9)
     {
         QMessageBox::warning(dock, "Thorlabs",
-            QString("Die aktuelle Geschwindigkeit würde %1 Hz erzeugen; erlaubt sind maximal 20 Hz.")
+            QString("The current velocity would generate %1 Hz; the maximum allowed is 20 Hz.")
                 .arg(triggerFrequencyHz, 0, 'f', 3));
         return;
     }
@@ -1651,7 +2148,7 @@ void thorlabsKinesisPlugin::slot_applyTrigger()
     if (static_cast<double>(width) > triggerPeriodUs + 1e-9)
     {
         QMessageBox::warning(dock, "Thorlabs",
-            "Die Pulsbreite ist größer als die Zeit zwischen zwei Triggerpulsen.");
+            "The pulse width is longer than the time between two trigger pulses.");
         return;
     }
 

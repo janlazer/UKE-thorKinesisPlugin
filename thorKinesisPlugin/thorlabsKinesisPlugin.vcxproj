@@ -134,6 +134,7 @@
     <ClCompile Include="KVSStage.cpp" />
     <ClCompile Include="KinesisDetect.cpp" />
     <ClCompile Include="ScanValidation.cpp" />
+    <ClCompile Include="ThorlabsPositionManagerDialog.cpp" />
     <ClCompile Include="thorlabsKinesisPlugin.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -144,6 +145,7 @@
     <ClInclude Include="KinesisDetect.h" />
     <ClInclude Include="ScanTypes.h" />
     <ClInclude Include="ScanValidation.h" />
+    <ClInclude Include="ThorlabsPositionManagerDialog.h" />
     <ClInclude Include="thorlabsKinesisPlugin_global.h" />
   </ItemGroup>
   <ItemGroup>
