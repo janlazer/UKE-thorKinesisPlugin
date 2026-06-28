@@ -21,6 +21,20 @@ constexpr short kErrTimeout = -4;
 constexpr short kErrTargetNotReached = -5;
 constexpr double kPositionToleranceUm = 0.5;
 
+// ThorlabsDefaultSettings.xml, DeviceSettingsDefinition Name="M30 Series":
+// Pitch=1.0 mm, StepsPerRev=10000, GearboxRatio=1, MinPos=-15 mm, MaxPos=+15 mm.
+// This yields 0.0001 mm/device-unit = 0.1 um/device-unit.
+constexpr double kBdcM30ExpectedStepsPerRev = 10000.0;
+constexpr double kBdcM30ExpectedGearboxRatio = 1.0;
+constexpr double kBdcM30ExpectedPitchMm = 1.0;
+constexpr double kBdcM30ExpectedUmPerDeviceUnit = 0.1;
+constexpr double kBdcM30MotorParamRelTolerance = 0.02;
+constexpr double kBdcM30ScaleRelTolerance = 0.25;
+constexpr double kBdcM30MaxSingleRelativeMoveUm = 1000.0;
+constexpr double kBdcM30MaxCoordinateMagnitudeUm = 31000.0;
+constexpr double kBdcM30MinTravelUm = 1000.0;
+constexpr double kBdcM30MaxTravelUm = 31000.0;
+
 bool isValidTriggerMode(int mode)
 {
     switch (mode)
@@ -51,6 +65,39 @@ bool isValidTriggerMode(int mode)
 bool isValidTriggerPolarity(int polarity)
 {
     return polarity == KMOT_TrigPolarityHigh || polarity == KMOT_TrigPolarityLow;
+}
+
+bool isCloseRelative(double actual, double expected, double relTolerance)
+{
+    if (!std::isfinite(actual) || !std::isfinite(expected))
+        return false;
+
+    const double scale = (std::max)(1.0, std::abs(expected));
+    return std::abs(actual - expected) <= scale * relTolerance;
+}
+
+bool isSafeBdcM30MotorScale(double stepsPerRev, double gearBoxRatio, double pitch)
+{
+    return isCloseRelative(stepsPerRev, kBdcM30ExpectedStepsPerRev, kBdcM30MotorParamRelTolerance)
+        && isCloseRelative(gearBoxRatio, kBdcM30ExpectedGearboxRatio, kBdcM30MotorParamRelTolerance)
+        && isCloseRelative(pitch, kBdcM30ExpectedPitchMm, kBdcM30MotorParamRelTolerance);
+}
+
+bool isSafeBdcM30PositionScale(double umPerDeviceUnit)
+{
+    return isCloseRelative(umPerDeviceUnit, kBdcM30ExpectedUmPerDeviceUnit, kBdcM30ScaleRelTolerance);
+}
+
+bool isSafeBdcM30AxisLimits(double minUm, double maxUm)
+{
+    if (!std::isfinite(minUm) || !std::isfinite(maxUm) || maxUm <= minUm)
+        return false;
+
+    const double travelUm = maxUm - minUm;
+    return std::abs(minUm) <= kBdcM30MaxCoordinateMagnitudeUm
+        && std::abs(maxUm) <= kBdcM30MaxCoordinateMagnitudeUm
+        && travelUm >= kBdcM30MinTravelUm
+        && travelUm <= kBdcM30MaxTravelUm;
 }
 
 }
@@ -155,6 +202,14 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
 
     m_serial = baseSerial;
     m_serialCStr = m_serial.c_str();
+    for (int idx = 0; idx < 2; ++idx)
+    {
+        m_positionSafetyReady[idx] = false;
+        m_minPositionDevice[idx] = 0;
+        m_maxPositionDevice[idx] = 0;
+        m_minPositionUm[idx] = 0.0;
+        m_maxPositionUm[idx] = 0.0;
+    }
 
     qDebug() << "BDCStage::open serial=" << m_serialCStr << "home=" << home;
 
@@ -204,6 +259,22 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
             close();
             return false;
         }
+
+        if (!isSafeBdcM30MotorScale(stepsPerRev, gearBoxRatio, pitch))
+        {
+            qDebug() << "BDCStage::open UNSAFE M30XY motor scale; refusing to move serial=" << m_serialCStr
+                << "ch=" << ch
+                << "stepsPerRev=" << stepsPerRev
+                << "gearBoxRatio=" << gearBoxRatio
+                << "pitch=" << pitch
+                << "expectedStepsPerRev=" << kBdcM30ExpectedStepsPerRev
+                << "expectedGearBoxRatio=" << kBdcM30ExpectedGearboxRatio
+                << "expectedPitch=" << kBdcM30ExpectedPitchMm;
+            if (errOut) *errOut = kErrInvalidState;
+            close();
+            return false;
+        }
+
         sleepMs(300);
     }
 
@@ -259,6 +330,62 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
             << "um/device=" << factor_um[idx]
             << "mm_s/device=" << factor_velocity_mm[idx]
             << "mm_s2/device=" << factor_acceleration_mm[idx];
+
+        if (!isSafeBdcM30PositionScale(factor_um[idx]))
+        {
+            qDebug() << "BDCStage::open UNSAFE M30XY position scale; refusing to move serial=" << m_serialCStr
+                << "ch=" << ch
+                << "um/device=" << factor_um[idx]
+                << "expectedUm/device=" << kBdcM30ExpectedUmPerDeviceUnit;
+            if (errOut) *errOut = kErrInvalidState;
+            close();
+            return false;
+        }
+
+        const int minAxisDevice = BDC_GetStageAxisMinPos(m_serialCStr, ch);
+        const int maxAxisDevice = BDC_GetStageAxisMaxPos(m_serialCStr, ch);
+        const double minAxisUm = static_cast<double>(minAxisDevice) * factor_um[idx];
+        const double maxAxisUm = static_cast<double>(maxAxisDevice) * factor_um[idx];
+        const MOT_LimitsSoftwareApproachPolicy softLimitPolicy = BDC_GetSoftLimitMode(m_serialCStr, ch);
+
+        qDebug() << "BDCStage::open axis safety serial=" << m_serialCStr
+            << "ch=" << ch
+            << "minDevice=" << minAxisDevice
+            << "maxDevice=" << maxAxisDevice
+            << "minUm=" << minAxisUm
+            << "maxUm=" << maxAxisUm
+            << "softLimitPolicy=" << static_cast<int>(softLimitPolicy);
+
+        if (maxAxisDevice <= minAxisDevice || !isSafeBdcM30AxisLimits(minAxisUm, maxAxisUm))
+        {
+            qDebug() << "BDCStage::open UNSAFE M30XY axis limits; refusing to move serial=" << m_serialCStr
+                << "ch=" << ch
+                << "minDevice=" << minAxisDevice
+                << "maxDevice=" << maxAxisDevice
+                << "minUm=" << minAxisUm
+                << "maxUm=" << maxAxisUm
+                << "maxCoordinateMagnitudeUm=" << kBdcM30MaxCoordinateMagnitudeUm
+                << "maxTravelUm=" << kBdcM30MaxTravelUm;
+            if (errOut) *errOut = kErrInvalidState;
+            close();
+            return false;
+        }
+
+        if (softLimitPolicy == AllowAllMoves)
+        {
+            qDebug() << "BDCStage::open UNSAFE M30XY soft-limit policy allows all moves; refusing to move serial="
+                << m_serialCStr
+                << "ch=" << ch;
+            if (errOut) *errOut = kErrInvalidState;
+            close();
+            return false;
+        }
+
+        m_minPositionDevice[idx] = static_cast<int32_t>(minAxisDevice);
+        m_maxPositionDevice[idx] = static_cast<int32_t>(maxAxisDevice);
+        m_minPositionUm[idx] = minAxisUm;
+        m_maxPositionUm[idx] = maxAxisUm;
+        m_positionSafetyReady[idx] = true;
     }
 
     sleepMs(500);
@@ -366,6 +493,14 @@ void BDCStage::close()
     BDC_Close(m_serialCStr);
 
     m_isOpen = false;
+    for (int idx = 0; idx < 2; ++idx)
+    {
+        m_positionSafetyReady[idx] = false;
+        m_minPositionDevice[idx] = 0;
+        m_maxPositionDevice[idx] = 0;
+        m_minPositionUm[idx] = 0.0;
+        m_maxPositionUm[idx] = 0.0;
+    }
 }
 
 bool BDCStage::homeIfNeeded(unsigned channel, short* errOut)
@@ -375,16 +510,24 @@ bool BDCStage::homeIfNeeded(unsigned channel, short* errOut)
     if (!validateReady(channel, errOut))
         return false;
 
+    const uint32_t statusBits = static_cast<uint32_t>(BDC_GetStatusBits(m_serialCStr, static_cast<short>(channel)));
+    const bool homed = (statusBits & 0x00000400u) != 0;
+    const bool moving = (statusBits & 0x00000030u) != 0;
     const bool canMoveWithoutHoming = BDC_CanMoveWithoutHomingFirst(m_serialCStr, (short)channel);
 
-    if (canMoveWithoutHoming)
+    if (homed && !moving)
     {
-        qDebug() << "BDCStage::homeIfNeeded SKIP (not required) serial=" << m_serialCStr << "ch=" << channel;
+        qDebug() << "BDCStage::homeIfNeeded SKIP (homed) serial=" << m_serialCStr
+            << "ch=" << channel
+            << "canMoveWithoutHoming=" << canMoveWithoutHoming;
         if (errOut) *errOut = 0;
         return true;
     }
 
-    qDebug() << "BDCStage::homeIfNeeded DO HOME serial=" << m_serialCStr << "ch=" << channel;
+    qDebug() << "BDCStage::homeIfNeeded DO HOME serial=" << m_serialCStr
+        << "ch=" << channel
+        << "statusBits=0x" << QString::number(statusBits, 16)
+        << "canMoveWithoutHoming=" << canMoveWithoutHoming;
     return home(channel, errOut);
 }
 
@@ -442,6 +585,41 @@ bool BDCStage::beginMoveTo(int32_t pos, unsigned channel, short* errOut)
 
     if (!validateReady(channel, errOut))
         return false;
+
+    const int idx = channelIndex(channel);
+    if (idx < 0 || !m_positionSafetyReady[idx])
+    {
+        qDebug() << "BDCStage::beginMoveTo refusing M30XY move because safety limits are not ready serial="
+            << m_serialCStr
+            << "ch=" << channel
+            << "targetDevice=" << pos;
+        if (errOut) *errOut = kErrInvalidState;
+        return false;
+    }
+
+    const uint32_t statusBits = static_cast<uint32_t>(BDC_GetStatusBits(m_serialCStr, static_cast<short>(channel)));
+    if ((statusBits & 0x00000400u) == 0)
+    {
+        qDebug() << "BDCStage::beginMoveTo refusing M30XY move because homed bit is not set serial=" << m_serialCStr
+            << "ch=" << channel
+            << "targetDevice=" << pos
+            << "statusBits=0x" << QString::number(statusBits, 16);
+        if (errOut) *errOut = kErrInvalidState;
+        return false;
+    }
+
+    if (pos < m_minPositionDevice[idx] || pos > m_maxPositionDevice[idx])
+    {
+        qDebug() << "BDCStage::beginMoveTo refusing unsafe M30XY target serial=" << m_serialCStr
+            << "ch=" << channel
+            << "targetDevice=" << pos
+            << "allowedMinDevice=" << m_minPositionDevice[idx]
+            << "allowedMaxDevice=" << m_maxPositionDevice[idx]
+            << "allowedMinUm=" << m_minPositionUm[idx]
+            << "allowedMaxUm=" << m_maxPositionUm[idx];
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
 
     BDC_ClearMessageQueue(m_serialCStr, (short)channel);
 
@@ -505,6 +683,33 @@ bool BDCStage::moveRel(int32_t delta, unsigned channel, short* errOut)
 
 bool BDCStage::moveToUm(double posUm, unsigned channel, short* errOut)
 {
+    if (!validateReady(channel, errOut))
+        return false;
+
+    const int idx = channelIndex(channel);
+    if (idx < 0 || !m_positionSafetyReady[idx])
+    {
+        qDebug() << "BDCStage::moveToUm refusing M30XY move because safety limits are not ready serial="
+            << m_serialCStr
+            << "ch=" << channel
+            << "posUm=" << posUm;
+        if (errOut) *errOut = kErrInvalidState;
+        return false;
+    }
+
+    if (!std::isfinite(posUm)
+        || posUm < m_minPositionUm[idx]
+        || posUm > m_maxPositionUm[idx])
+    {
+        qDebug() << "BDCStage::moveToUm refusing unsafe absolute M30XY position serial=" << m_serialCStr
+            << "ch=" << channel
+            << "posUm=" << posUm
+            << "allowedMinUm=" << m_minPositionUm[idx]
+            << "allowedMaxUm=" << m_maxPositionUm[idx];
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
     short err = 0;
     const int32_t targetDev = umToDevice(posUm, channel, &err);
     if (err != 0)
@@ -523,11 +728,48 @@ bool BDCStage::moveToUm(double posUm, unsigned channel, short* errOut)
 
 bool BDCStage::moveRelUm(double deltaUm, unsigned channel, short* errOut)
 {
+    if (!std::isfinite(deltaUm) || std::abs(deltaUm) > kBdcM30MaxSingleRelativeMoveUm)
+    {
+        qDebug() << "BDCStage::moveRelUm refusing unsafe M30XY relative move serial=" << m_serialCStr
+            << "ch=" << channel
+            << "deltaUm=" << deltaUm
+            << "maxAllowedUm=" << kBdcM30MaxSingleRelativeMoveUm;
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
     short err = 0;
     const int32_t deltaDev = umToDevice(deltaUm, channel, &err);
     if (err != 0)
     {
         if (errOut) *errOut = err;
+        return false;
+    }
+
+    const double convertedBackUm = deviceToUm(deltaDev, channel);
+    if (!std::isfinite(convertedBackUm)
+        || std::abs(convertedBackUm - deltaUm) > (std::max)(1.0, std::abs(deltaUm)) * kBdcM30ScaleRelTolerance)
+    {
+        qDebug() << "BDCStage::moveRelUm refusing inconsistent M30XY conversion serial=" << m_serialCStr
+            << "ch=" << channel
+            << "deltaUm=" << deltaUm
+            << "deltaDev=" << deltaDev
+            << "convertedBackUm=" << convertedBackUm
+            << "um/device=" << factor_um[channelIndex(channel)];
+        if (errOut) *errOut = kErrInvalidState;
+        return false;
+    }
+
+    const double expectedDeviceDelta = deltaUm / kBdcM30ExpectedUmPerDeviceUnit;
+    if (std::abs(static_cast<double>(deltaDev) - expectedDeviceDelta)
+        > (std::max)(20.0, std::abs(expectedDeviceDelta) * kBdcM30ScaleRelTolerance))
+    {
+        qDebug() << "BDCStage::moveRelUm refusing unsafe M30XY device delta serial=" << m_serialCStr
+            << "ch=" << channel
+            << "deltaUm=" << deltaUm
+            << "deltaDev=" << deltaDev
+            << "expectedDeviceDelta~=" << expectedDeviceDelta;
+        if (errOut) *errOut = kErrInvalidState;
         return false;
     }
 
@@ -748,6 +990,58 @@ bool BDCStage::applyTriggerConfig(unsigned channel, short* errOut)
         || (needsRev && (requested.intervalRev <= 0 || requested.pulseCountRev <= 0)))
     {
         qDebug() << "BDCStage::applyTriggerConfig invalid position-step parameters";
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    const int idx = channelIndex(channel);
+    if (idx < 0 || !m_positionSafetyReady[idx])
+    {
+        qDebug() << "BDCStage::applyTriggerConfig refusing M30XY trigger because safety limits are not ready serial="
+            << m_serialCStr
+            << "ch=" << channel;
+        if (errOut) *errOut = kErrInvalidState;
+        return false;
+    }
+
+    const auto triggerSequenceInsideSafeRange = [this, idx](int32_t start, int32_t interval, int32_t count, int direction, int64_t* lastOut) {
+        const int64_t last = static_cast<int64_t>(start)
+            + static_cast<int64_t>(direction) * static_cast<int64_t>(interval) * static_cast<int64_t>(count - 1);
+        if (lastOut) *lastOut = last;
+
+        return static_cast<int64_t>(start) >= static_cast<int64_t>(m_minPositionDevice[idx])
+            && static_cast<int64_t>(start) <= static_cast<int64_t>(m_maxPositionDevice[idx])
+            && last >= static_cast<int64_t>(m_minPositionDevice[idx])
+            && last <= static_cast<int64_t>(m_maxPositionDevice[idx]);
+    };
+
+    int64_t lastTriggerPos = 0;
+    if (needsFwd && !triggerSequenceInsideSafeRange(
+        requested.startPosFwd, requested.intervalFwd, requested.pulseCountFwd, +1, &lastTriggerPos))
+    {
+        qDebug() << "BDCStage::applyTriggerConfig refusing unsafe M30XY forward trigger range serial=" << m_serialCStr
+            << "ch=" << channel
+            << "start=" << requested.startPosFwd
+            << "interval=" << requested.intervalFwd
+            << "count=" << requested.pulseCountFwd
+            << "last=" << lastTriggerPos
+            << "allowedMinDevice=" << m_minPositionDevice[idx]
+            << "allowedMaxDevice=" << m_maxPositionDevice[idx];
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    if (needsRev && !triggerSequenceInsideSafeRange(
+        requested.startPosRev, requested.intervalRev, requested.pulseCountRev, -1, &lastTriggerPos))
+    {
+        qDebug() << "BDCStage::applyTriggerConfig refusing unsafe M30XY reverse trigger range serial=" << m_serialCStr
+            << "ch=" << channel
+            << "start=" << requested.startPosRev
+            << "interval=" << requested.intervalRev
+            << "count=" << requested.pulseCountRev
+            << "last=" << lastTriggerPos
+            << "allowedMinDevice=" << m_minPositionDevice[idx]
+            << "allowedMaxDevice=" << m_maxPositionDevice[idx];
         if (errOut) *errOut = kErrInvalidArgument;
         return false;
     }

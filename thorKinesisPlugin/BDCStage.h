@@ -111,6 +111,13 @@ private:
     BDCTriggerConfig m_trig;
     bool m_triggerEnabled[2] = { false, false };
 
+    // Safety limits read and validated from Kinesis at open time.
+    bool m_positionSafetyReady[2] = { false, false };
+    int32_t m_minPositionDevice[2] = { 0, 0 };
+    int32_t m_maxPositionDevice[2] = { 0, 0 };
+    double m_minPositionUm[2] = { 0.0, 0.0 };
+    double m_maxPositionUm[2] = { 0.0, 0.0 };
+
     // Internal scaling: real units assumed mm for linear stages
     double factor_position_mm[2] = { 1.0, 1.0 };       // mm / device unit
     double factor_velocity_mm[2] = { 1.0, 1.0 };       // mm/s / device unit
