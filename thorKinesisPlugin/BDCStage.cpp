@@ -267,8 +267,14 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
             << "ch=" << ch;
 
         err = BDC_SetMotorTravelMode(m_serialCStr, ch, MOT_Linear);
-        if (!okOrLog("BDC_SetMotorTravelMode", m_serial, err, ch, errOut))
-            return false;
+        if (err != 0)
+        {
+            qDebug() << "BDCStage::open warning: BDC_SetMotorTravelMode failed; continuing because "
+                << kBdcM30SettingsName
+                << "named settings and motor-scale validation still guard moves serial=" << m_serialCStr
+                << "ch=" << ch
+                << "err=" << err;
+        }
 
         err = BDC_SetMotorParamsExt(
             m_serialCStr,
@@ -315,8 +321,18 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
         velocityParams.maxVelocity = moveMaxVelocityDevice;
 
         err = BDC_SetVelParamsBlock(m_serialCStr, ch, &velocityParams);
-        if (!okOrLog("BDC_SetVelParamsBlock", m_serial, err, ch, errOut))
-            return false;
+        if (err != 0)
+        {
+            qDebug() << "BDCStage::open warning: BDC_SetVelParamsBlock failed; trying BDC_SetVelParams serial="
+                << m_serialCStr
+                << "ch=" << ch
+                << "accDevice=" << moveAccelerationDevice
+                << "maxVelDevice=" << moveMaxVelocityDevice
+                << "err=" << err;
+
+            const short fallbackErr = BDC_SetVelParams(m_serialCStr, ch, moveAccelerationDevice, moveMaxVelocityDevice);
+            qDebug() << "BDCStage::open BDC_SetVelParams fallback ch=" << ch << "err=" << fallbackErr;
+        }
 
         int jogStepDevice = 0;
         int jogAccelerationDevice = 0;
@@ -337,8 +353,13 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
         jogParams.stopMode = MOT_Profiled;
 
         err = BDC_SetJogParamsBlock(m_serialCStr, ch, &jogParams);
-        if (!okOrLog("BDC_SetJogParamsBlock", m_serial, err, ch, errOut))
-            return false;
+        if (err != 0)
+        {
+            qDebug() << "BDCStage::open warning: BDC_SetJogParamsBlock failed; continuing because plugin step "
+                << "moves use moveRelUm, not Kinesis jog parameters serial=" << m_serialCStr
+                << "ch=" << ch
+                << "err=" << err;
+        }
 
         return true;
     };

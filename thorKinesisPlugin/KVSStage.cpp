@@ -38,8 +38,10 @@ constexpr double kKvs30ExpectedStepsPerRev = 20000.0;
 constexpr double kKvs30ExpectedGearboxRatio = 1.0;
 constexpr double kKvs30ExpectedPitchMm = 1.0;
 constexpr double kKvs30ExpectedUmPerDeviceUnit = 0.05;
+constexpr double kKvs30ExpectedMmPerDeviceUnit = kKvs30ExpectedUmPerDeviceUnit / 1000.0;
 constexpr double kKvs30MotorParamRelTolerance = 0.02;
 constexpr double kKvs30ScaleRelTolerance = 0.25;
+constexpr double kKvs30VelocityDeviceRelTolerance = 0.50;
 constexpr double kKvs30MaxSingleRelativeMoveUm = 1000.0;
 constexpr int32_t kKvs30MinPositionDeviceUnits = 0;
 constexpr int32_t kKvs30MaxPositionDeviceUnits = 600000;
@@ -47,11 +49,19 @@ constexpr double kKvs30MinAbsolutePositionUm = 0.0;
 constexpr double kKvs30MaxAbsolutePositionUm = 30000.0;
 constexpr double kKvs30MoveAccelerationMmS2 = 1.0;
 constexpr double kKvs30MoveMaxVelocityMmS = 2.0;
+constexpr int kKvs30MoveAccelerationDeviceUnits = 153;
+constexpr int kKvs30MoveMaxVelocityDeviceUnits = 894771;
+constexpr double kKvs30ExpectedVelocityMmPerDeviceUnit =
+    kKvs30MoveMaxVelocityMmS / static_cast<double>(kKvs30MoveMaxVelocityDeviceUnits);
+constexpr double kKvs30ExpectedAccelerationMmPerDeviceUnit =
+    kKvs30MoveAccelerationMmS2 / static_cast<double>(kKvs30MoveAccelerationDeviceUnits);
 constexpr double kKvs30MotorMaxVelocityMmS = 8.0;
 constexpr double kKvs30MotorMaxAccelerationMmS2 = 5.0;
 constexpr unsigned short kKvs30TrackSettleTimeCycles = 197;
 constexpr unsigned short kKvs30TrackSettleSettledError = 20;
 constexpr unsigned short kKvs30TrackSettleMaxTrackingError = 0;
+constexpr unsigned kKvs30MaxSafeTrackSettleTimeCycles = 1000; // 102.4 ms
+constexpr unsigned kKvs30MaxSafeTrackSettleErrorCounts = 1000;
 
 bool isValidTriggerMode(int mode)
 {
@@ -100,6 +110,25 @@ bool isSafeKvs30MotorScale(double stepsPerRev, double gearBoxRatio, double pitch
 bool isSafeKvs30PositionScale(double umPerDeviceUnit)
 {
     return isCloseRelative(umPerDeviceUnit, kKvs30ExpectedUmPerDeviceUnit, kKvs30ScaleRelTolerance);
+}
+
+bool isSafeKvs30VelocityDeviceValue(int actual, int expected)
+{
+    return actual > 0
+        && std::abs(static_cast<double>(actual) - static_cast<double>(expected))
+        <= (std::max)(1.0, std::abs(static_cast<double>(expected))) * kKvs30VelocityDeviceRelTolerance;
+}
+
+bool isSafeKvs30TrackSettle(const MOT_BrushlessTrackSettleParameters& params)
+{
+    const unsigned timeCycles = static_cast<unsigned>(params.time);
+    const unsigned settledError = static_cast<unsigned>(params.settledError);
+    const unsigned maxTrackingError = static_cast<unsigned>(params.maxTrackingError);
+
+    return timeCycles > 0
+        && timeCycles <= kKvs30MaxSafeTrackSettleTimeCycles
+        && settledError <= kKvs30MaxSafeTrackSettleErrorCounts
+        && maxTrackingError <= kKvs30MaxSafeTrackSettleErrorCounts;
 }
 
 void logTrackSettleParams(const char* context, const std::string& serial,
@@ -271,39 +300,57 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
 
     KVS_SetLimitsSoftwareApproachPolicy(m_serialCStr, DisallowIllegalMoves);
 
-    int moveAccelerationDevice = 0;
-    err = KVS_GetDeviceUnitFromRealValue(
-        m_serialCStr,
-        kKvs30MoveAccelerationMmS2,
-        &moveAccelerationDevice,
-        2);
-    if (!okOrLog("KVS_GetDeviceUnitFromRealValue(move acc)", m_serial, err, errOut))
+    auto convertKvsRuntimeDefault = [&](double value, int unitType, const char* label, int fallbackDeviceUnits) -> int
     {
-        close();
-        return false;
-    }
+        int deviceUnits = 0;
+        const short conversionErr = KVS_GetDeviceUnitFromRealValue(m_serialCStr, value, &deviceUnits, unitType);
+        qDebug() << "KVSStage::open KVS_GetDeviceUnitFromRealValue runtime default"
+            << "label=" << label
+            << "value=" << value
+            << "unitType=" << unitType
+            << "deviceUnits=" << deviceUnits
+            << "err=" << conversionErr;
 
-    int moveMaxVelocityDevice = 0;
-    err = KVS_GetDeviceUnitFromRealValue(
-        m_serialCStr,
+        if (conversionErr == 0 && isSafeKvs30VelocityDeviceValue(deviceUnits, fallbackDeviceUnits))
+            return deviceUnits;
+
+        qDebug() << "KVSStage::open warning: using fixed KVS30/M runtime default device units serial="
+            << m_serialCStr
+            << "label=" << label
+            << "value=" << value
+            << "unitType=" << unitType
+            << "conversionErr=" << conversionErr
+            << "convertedDeviceUnits=" << deviceUnits
+            << "fallbackDeviceUnits=" << fallbackDeviceUnits;
+        return fallbackDeviceUnits;
+    };
+
+    const int moveAccelerationDevice = convertKvsRuntimeDefault(
+        kKvs30MoveAccelerationMmS2,
+        2,
+        "move acceleration",
+        kKvs30MoveAccelerationDeviceUnits);
+    const int moveMaxVelocityDevice = convertKvsRuntimeDefault(
         kKvs30MoveMaxVelocityMmS,
-        &moveMaxVelocityDevice,
-        1);
-    if (!okOrLog("KVS_GetDeviceUnitFromRealValue(move vel)", m_serial, err, errOut))
-    {
-        close();
-        return false;
-    }
+        1,
+        "move max velocity",
+        kKvs30MoveMaxVelocityDeviceUnits);
 
     MOT_VelocityParameters moveVelocityParams = {};
     moveVelocityParams.minVelocity = 0;
     moveVelocityParams.acceleration = moveAccelerationDevice;
     moveVelocityParams.maxVelocity = moveMaxVelocityDevice;
     err = KVS_SetVelParamsBlock(m_serialCStr, &moveVelocityParams);
-    if (!okOrLog("KVS_SetVelParamsBlock", m_serial, err, errOut))
+    if (err != 0)
     {
-        close();
-        return false;
+        qDebug() << "KVSStage::open warning: KVS_SetVelParamsBlock failed; trying KVS_SetVelParams serial="
+            << m_serialCStr
+            << "accDevice=" << moveAccelerationDevice
+            << "maxVelDevice=" << moveMaxVelocityDevice
+            << "err=" << err;
+
+        const short fallbackErr = KVS_SetVelParams(m_serialCStr, moveAccelerationDevice, moveMaxVelocityDevice);
+        qDebug() << "KVSStage::open KVS_SetVelParams fallback err=" << fallbackErr;
     }
 
     MOT_BrushlessTrackSettleParameters safeTrackSettleParams = {};
@@ -313,10 +360,14 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
     safeTrackSettleParams.notUsed = 0;
     safeTrackSettleParams.lastNotUsed = 0;
     err = KVS_SetTrackSettleParams(m_serialCStr, &safeTrackSettleParams);
-    if (!okOrLog("KVS_SetTrackSettleParams", m_serial, err, errOut))
+    if (err != 0)
     {
-        close();
-        return false;
+        qDebug() << "KVSStage::open warning: KVS_SetTrackSettleParams failed; continuing with validation serial="
+            << m_serialCStr
+            << "err=" << err
+            << "timeCycles=" << kKvs30TrackSettleTimeCycles
+            << "settledError=" << kKvs30TrackSettleSettledError
+            << "maxTrackingError=" << kKvs30TrackSettleMaxTrackingError;
     }
 
     err = KVS_RequestSettings(m_serialCStr);
@@ -331,15 +382,35 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
     MOT_BrushlessTrackSettleParameters trackSettleParams = {};
     err = KVS_RequestTrackSettleParams(m_serialCStr);
     qDebug() << "KVSStage::open KVS_RequestTrackSettleParams err=" << err;
-    if (err == 0)
+    if (!okOrLog("KVS_RequestTrackSettleParams", m_serial, err, errOut))
     {
-        sleepMs(100);
-        const short getTrackSettleErr = KVS_GetTrackSettleParams(m_serialCStr, &trackSettleParams);
-        qDebug() << "KVSStage::open KVS_GetTrackSettleParams err=" << getTrackSettleErr;
-        if (getTrackSettleErr == 0)
-        {
-            logTrackSettleParams("KVSStage::open track/settle", m_serial, trackSettleParams);
-        }
+        close();
+        return false;
+    }
+
+    sleepMs(100);
+    const short getTrackSettleErr = KVS_GetTrackSettleParams(m_serialCStr, &trackSettleParams);
+    qDebug() << "KVSStage::open KVS_GetTrackSettleParams err=" << getTrackSettleErr;
+    if (!okOrLog("KVS_GetTrackSettleParams", m_serial, getTrackSettleErr, errOut))
+    {
+        close();
+        return false;
+    }
+
+    logTrackSettleParams("KVSStage::open track/settle", m_serial, trackSettleParams);
+    if (!isSafeKvs30TrackSettle(trackSettleParams))
+    {
+        qDebug() << "KVSStage::open UNSAFE KVS30/M track/settle values; refusing to move serial="
+            << m_serialCStr
+            << "timeCycles=" << static_cast<unsigned>(trackSettleParams.time)
+            << "timeMs=" << static_cast<double>(trackSettleParams.time) * kTrackSettleCycleMs
+            << "settledError/windowCounts=" << static_cast<unsigned>(trackSettleParams.settledError)
+            << "maxTrackingErrorCounts=" << static_cast<unsigned>(trackSettleParams.maxTrackingError)
+            << "maxSafeTimeCycles=" << kKvs30MaxSafeTrackSettleTimeCycles
+            << "maxSafeErrorCounts=" << kKvs30MaxSafeTrackSettleErrorCounts;
+        if (errOut) *errOut = kErrInvalidState;
+        close();
+        return false;
     }
 
     double stepsPerRev = 0.0;
@@ -352,23 +423,22 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
         << "stepsPerRev=" << stepsPerRev
         << "gearBoxRatio=" << gearBoxRatio
         << "pitch=" << pitch;
-    if (!okOrLog("KVS_GetMotorParamsExt", m_serial, err, errOut))
+    if (err != 0)
     {
-        close();
-        return false;
+        qDebug() << "KVSStage::open warning: KVS_GetMotorParamsExt failed after runtime defaults; "
+            << "continuing to direct position-scale validation serial=" << m_serialCStr
+            << "err=" << err;
     }
-    if (!isSafeKvs30MotorScale(stepsPerRev, gearBoxRatio, pitch))
+    else if (!isSafeKvs30MotorScale(stepsPerRev, gearBoxRatio, pitch))
     {
-        qDebug() << "KVSStage::open UNSAFE KVS30/M motor scale; refusing to move serial=" << m_serialCStr
+        qDebug() << "KVSStage::open warning: KVS_GetMotorParamsExt returned implausible values after "
+            << "runtime defaults; continuing to direct position-scale validation serial=" << m_serialCStr
             << "stepsPerRev=" << stepsPerRev
             << "gearBoxRatio=" << gearBoxRatio
             << "pitch=" << pitch
             << "expectedStepsPerRev=" << kKvs30ExpectedStepsPerRev
             << "expectedGearBoxRatio=" << kKvs30ExpectedGearboxRatio
             << "expectedPitch=" << kKvs30ExpectedPitchMm;
-        if (errOut) *errOut = kErrInvalidState;
-        close();
-        return false;
     }
     sleepMs(300);
 
@@ -378,35 +448,43 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
     double realVelMmPerDevice = 0.0;
     double realAccMmPerDevice = 0.0;
 
-    err = KVS_GetRealValueFromDeviceUnit(m_serialCStr, 1, &realPosMmPerDevice, 0);
-    if (!okOrLog("KVS_GetRealValueFromDeviceUnit(pos)", m_serial, err, errOut))
+    const short posFactorErr = KVS_GetRealValueFromDeviceUnit(m_serialCStr, 1, &realPosMmPerDevice, 0);
+    qDebug() << "KVSStage::open KVS_GetRealValueFromDeviceUnit(pos)"
+        << "err=" << posFactorErr
+        << "mm/device=" << realPosMmPerDevice;
+    if (posFactorErr != 0 || !isSafeKvs30PositionScale(realPosMmPerDevice * 1000.0))
     {
-        close();
-        return false;
+        qDebug() << "KVSStage::open warning: using fixed KVS30/M position scale serial=" << m_serialCStr
+            << "err=" << posFactorErr
+            << "readMm/device=" << realPosMmPerDevice
+            << "fallbackMm/device=" << kKvs30ExpectedMmPerDeviceUnit;
+        realPosMmPerDevice = kKvs30ExpectedMmPerDeviceUnit;
     }
 
-    err = KVS_GetRealValueFromDeviceUnit(m_serialCStr, 1, &realVelMmPerDevice, 1);
-    if (!okOrLog("KVS_GetRealValueFromDeviceUnit(vel)", m_serial, err, errOut))
+    const short velFactorErr = KVS_GetRealValueFromDeviceUnit(m_serialCStr, 1, &realVelMmPerDevice, 1);
+    qDebug() << "KVSStage::open KVS_GetRealValueFromDeviceUnit(vel)"
+        << "err=" << velFactorErr
+        << "mm_s/device=" << realVelMmPerDevice;
+    if (velFactorErr != 0 || !std::isfinite(realVelMmPerDevice) || realVelMmPerDevice <= 0.0)
     {
-        close();
-        return false;
+        qDebug() << "KVSStage::open warning: using fixed KVS30/M velocity scale serial=" << m_serialCStr
+            << "err=" << velFactorErr
+            << "readMm_s/device=" << realVelMmPerDevice
+            << "fallbackMm_s/device=" << kKvs30ExpectedVelocityMmPerDeviceUnit;
+        realVelMmPerDevice = kKvs30ExpectedVelocityMmPerDeviceUnit;
     }
 
-    err = KVS_GetRealValueFromDeviceUnit(m_serialCStr, 1, &realAccMmPerDevice, 2);
-    if (!okOrLog("KVS_GetRealValueFromDeviceUnit(acc)", m_serial, err, errOut))
+    const short accFactorErr = KVS_GetRealValueFromDeviceUnit(m_serialCStr, 1, &realAccMmPerDevice, 2);
+    qDebug() << "KVSStage::open KVS_GetRealValueFromDeviceUnit(acc)"
+        << "err=" << accFactorErr
+        << "mm_s2/device=" << realAccMmPerDevice;
+    if (accFactorErr != 0 || !std::isfinite(realAccMmPerDevice) || realAccMmPerDevice <= 0.0)
     {
-        close();
-        return false;
-    }
-
-    if (!std::isfinite(realPosMmPerDevice) || realPosMmPerDevice <= 0.0
-        || !std::isfinite(realVelMmPerDevice) || realVelMmPerDevice <= 0.0
-        || !std::isfinite(realAccMmPerDevice) || realAccMmPerDevice <= 0.0)
-    {
-        qDebug() << "KVSStage::open invalid conversion factors";
-        if (errOut) *errOut = kErrInvalidState;
-        close();
-        return false;
+        qDebug() << "KVSStage::open warning: using fixed KVS30/M acceleration scale serial=" << m_serialCStr
+            << "err=" << accFactorErr
+            << "readMm_s2/device=" << realAccMmPerDevice
+            << "fallbackMm_s2/device=" << kKvs30ExpectedAccelerationMmPerDeviceUnit;
+        realAccMmPerDevice = kKvs30ExpectedAccelerationMmPerDeviceUnit;
     }
 
     factor_position_mm = realPosMmPerDevice;
@@ -425,6 +503,47 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
         qDebug() << "KVSStage::open UNSAFE KVS30/M position scale; refusing to move serial=" << m_serialCStr
             << "um/device=" << factor_um
             << "expectedUm/device=" << kKvs30ExpectedUmPerDeviceUnit;
+        if (errOut) *errOut = kErrInvalidState;
+        close();
+        return false;
+    }
+
+    const int minAxisDevice = KVS_GetStageAxisMinPos(m_serialCStr);
+    const int maxAxisDevice = KVS_GetStageAxisMaxPos(m_serialCStr);
+    const double minAxisUm = static_cast<double>(minAxisDevice) * factor_um;
+    const double maxAxisUm = static_cast<double>(maxAxisDevice) * factor_um;
+    const MOT_LimitsSoftwareApproachPolicy softLimitPolicy = KVS_GetSoftLimitMode(m_serialCStr);
+
+    qDebug() << "KVSStage::open axis safety serial=" << m_serialCStr
+        << "minDevice=" << minAxisDevice
+        << "maxDevice=" << maxAxisDevice
+        << "minUm=" << minAxisUm
+        << "maxUm=" << maxAxisUm
+        << "softLimitPolicy=" << static_cast<int>(softLimitPolicy);
+
+    if (minAxisDevice != kKvs30MinPositionDeviceUnits
+        || maxAxisDevice != kKvs30MaxPositionDeviceUnits
+        || std::abs(minAxisUm - kKvs30MinAbsolutePositionUm) > 1.0
+        || std::abs(maxAxisUm - kKvs30MaxAbsolutePositionUm) > 1.0)
+    {
+        qDebug() << "KVSStage::open UNSAFE KVS30/M axis limits; refusing to move serial=" << m_serialCStr
+            << "minDevice=" << minAxisDevice
+            << "maxDevice=" << maxAxisDevice
+            << "minUm=" << minAxisUm
+            << "maxUm=" << maxAxisUm
+            << "expectedMinDevice=" << kKvs30MinPositionDeviceUnits
+            << "expectedMaxDevice=" << kKvs30MaxPositionDeviceUnits
+            << "expectedMinUm=" << kKvs30MinAbsolutePositionUm
+            << "expectedMaxUm=" << kKvs30MaxAbsolutePositionUm;
+        if (errOut) *errOut = kErrInvalidState;
+        close();
+        return false;
+    }
+
+    if (softLimitPolicy == AllowAllMoves)
+    {
+        qDebug() << "KVSStage::open UNSAFE KVS30/M soft-limit policy allows all moves; refusing to move serial="
+            << m_serialCStr;
         if (errOut) *errOut = kErrInvalidState;
         close();
         return false;
@@ -796,12 +915,29 @@ int32_t KVSStage::mmToDevice(double mm, short* errOut) const
         return 0;
     }
 
-    int deviceUnits = 0;
-    short err = KVS_GetDeviceUnitFromRealValue(m_serialCStr, mm, &deviceUnits, 0);
-    if (!okOrLog("KVS_GetDeviceUnitFromRealValue(pos)", m_serial, err, errOut))
+    if (!std::isfinite(factor_position_mm) || factor_position_mm <= 0.0)
+    {
+        qDebug() << "KVSStage::mmToDevice invalid position scale serial=" << m_serialCStr
+            << "factor_position_mm=" << factor_position_mm;
+        if (errOut) *errOut = kErrInvalidState;
         return 0;
+    }
 
-    return (int32_t)deviceUnits;
+    const double rawDeviceUnits = mm / factor_position_mm;
+    if (!std::isfinite(rawDeviceUnits)
+        || rawDeviceUnits < static_cast<double>((std::numeric_limits<int32_t>::min)())
+        || rawDeviceUnits > static_cast<double>((std::numeric_limits<int32_t>::max)()))
+    {
+        qDebug() << "KVSStage::mmToDevice refusing out-of-range conversion serial=" << m_serialCStr
+            << "mm=" << mm
+            << "factor_position_mm=" << factor_position_mm
+            << "rawDeviceUnits=" << rawDeviceUnits;
+        if (errOut) *errOut = kErrInvalidArgument;
+        return 0;
+    }
+
+    if (errOut) *errOut = 0;
+    return static_cast<int32_t>(std::llround(rawDeviceUnits));
 }
 
 int32_t KVSStage::umToDevice(double um, short* errOut) const

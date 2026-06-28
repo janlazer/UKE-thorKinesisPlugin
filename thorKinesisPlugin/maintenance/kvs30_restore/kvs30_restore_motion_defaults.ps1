@@ -182,6 +182,9 @@ public static class KvsRestoreNative
     public static extern short KVS_SetVelParamsBlock(string serialNo, ref KvsVelocityParams velocityParams);
 
     [DllImport("Thorlabs.MotionControl.VerticalStage.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern short KVS_SetVelParams(string serialNo, int acceleration, int maxVelocity);
+
+    [DllImport("Thorlabs.MotionControl.VerticalStage.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
     public static extern short KVS_RequestTrackSettleParams(string serialNo);
 
     [DllImport("Thorlabs.MotionControl.VerticalStage.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
@@ -345,7 +348,11 @@ function Restore-KvsDefaults {
     $velParams.minVelocity = 0
     $velParams.acceleration = $accDevice
     $velParams.maxVelocity = $velDevice
-    Assert-Ok "KVS_SetVelParamsBlock" ([KvsRestoreNative]::KVS_SetVelParamsBlock($Serial, [ref]$velParams))
+    $velBlockErr = [KvsRestoreNative]::KVS_SetVelParamsBlock($Serial, [ref]$velParams)
+    if ($velBlockErr -ne 0) {
+        Write-Warning "KVS_SetVelParamsBlock returned $velBlockErr. Trying KVS_SetVelParams fallback so Track/Settle restore can continue."
+        Assert-Ok "KVS_SetVelParams fallback" ([KvsRestoreNative]::KVS_SetVelParams($Serial, $accDevice, $velDevice))
+    }
 
     $settleParams = New-Object KvsTrackSettleParams
     $settleParams.time = [uint16]$TrackSettleTimeCycles
