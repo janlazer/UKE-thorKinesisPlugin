@@ -45,6 +45,13 @@ constexpr int32_t kKvs30MinPositionDeviceUnits = 0;
 constexpr int32_t kKvs30MaxPositionDeviceUnits = 600000;
 constexpr double kKvs30MinAbsolutePositionUm = 0.0;
 constexpr double kKvs30MaxAbsolutePositionUm = 30000.0;
+constexpr double kKvs30MoveAccelerationMmS2 = 1.0;
+constexpr double kKvs30MoveMaxVelocityMmS = 2.0;
+constexpr double kKvs30MotorMaxVelocityMmS = 8.0;
+constexpr double kKvs30MotorMaxAccelerationMmS2 = 5.0;
+constexpr unsigned short kKvs30TrackSettleTimeCycles = 197;
+constexpr unsigned short kKvs30TrackSettleSettledError = 20;
+constexpr unsigned short kKvs30TrackSettleMaxTrackingError = 0;
 
 bool isValidTriggerMode(int mode)
 {
@@ -200,8 +207,8 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
 
     m_isOpen = true;
 
-    const bool loaded = KVS_LoadSettings(m_serialCStr);
-    qDebug() << "KVSStage::open KVS_LoadSettings loaded=" << loaded;
+    const bool loaded = KVS_LoadNamedSettings(m_serialCStr, "KVS30");
+    qDebug() << "KVSStage::open KVS_LoadNamedSettings(KVS30) loaded=" << loaded;
     if (!loaded)
     {
         if (errOut) *errOut = kErrInvalidState;
@@ -217,6 +224,108 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
         return false;
     }
 
+    sleepMs(300);
+
+    qDebug() << "KVSStage::open applying KVS30/M safe runtime defaults serial=" << m_serialCStr;
+
+    err = KVS_SetMotorParamsExt(
+        m_serialCStr,
+        kKvs30ExpectedStepsPerRev,
+        kKvs30ExpectedGearboxRatio,
+        kKvs30ExpectedPitchMm);
+    if (!okOrLog("KVS_SetMotorParamsExt", m_serial, err, errOut))
+    {
+        close();
+        return false;
+    }
+
+    err = KVS_SetMotorTravelLimits(
+        m_serialCStr,
+        kKvs30MinAbsolutePositionUm / 1000.0,
+        kKvs30MaxAbsolutePositionUm / 1000.0);
+    if (!okOrLog("KVS_SetMotorTravelLimits", m_serial, err, errOut))
+    {
+        close();
+        return false;
+    }
+
+    err = KVS_SetMotorVelocityLimits(
+        m_serialCStr,
+        kKvs30MotorMaxVelocityMmS,
+        kKvs30MotorMaxAccelerationMmS2);
+    if (!okOrLog("KVS_SetMotorVelocityLimits", m_serial, err, errOut))
+    {
+        close();
+        return false;
+    }
+
+    err = KVS_SetStageAxisLimits(
+        m_serialCStr,
+        kKvs30MinPositionDeviceUnits,
+        kKvs30MaxPositionDeviceUnits);
+    if (!okOrLog("KVS_SetStageAxisLimits", m_serial, err, errOut))
+    {
+        close();
+        return false;
+    }
+
+    KVS_SetLimitsSoftwareApproachPolicy(m_serialCStr, DisallowIllegalMoves);
+
+    int moveAccelerationDevice = 0;
+    err = KVS_GetDeviceUnitFromRealValue(
+        m_serialCStr,
+        kKvs30MoveAccelerationMmS2,
+        &moveAccelerationDevice,
+        2);
+    if (!okOrLog("KVS_GetDeviceUnitFromRealValue(move acc)", m_serial, err, errOut))
+    {
+        close();
+        return false;
+    }
+
+    int moveMaxVelocityDevice = 0;
+    err = KVS_GetDeviceUnitFromRealValue(
+        m_serialCStr,
+        kKvs30MoveMaxVelocityMmS,
+        &moveMaxVelocityDevice,
+        1);
+    if (!okOrLog("KVS_GetDeviceUnitFromRealValue(move vel)", m_serial, err, errOut))
+    {
+        close();
+        return false;
+    }
+
+    MOT_VelocityParameters moveVelocityParams = {};
+    moveVelocityParams.minVelocity = 0;
+    moveVelocityParams.acceleration = moveAccelerationDevice;
+    moveVelocityParams.maxVelocity = moveMaxVelocityDevice;
+    err = KVS_SetVelParamsBlock(m_serialCStr, &moveVelocityParams);
+    if (!okOrLog("KVS_SetVelParamsBlock", m_serial, err, errOut))
+    {
+        close();
+        return false;
+    }
+
+    MOT_BrushlessTrackSettleParameters safeTrackSettleParams = {};
+    safeTrackSettleParams.time = static_cast<WORD>(kKvs30TrackSettleTimeCycles);
+    safeTrackSettleParams.settledError = static_cast<WORD>(kKvs30TrackSettleSettledError);
+    safeTrackSettleParams.maxTrackingError = static_cast<WORD>(kKvs30TrackSettleMaxTrackingError);
+    safeTrackSettleParams.notUsed = 0;
+    safeTrackSettleParams.lastNotUsed = 0;
+    err = KVS_SetTrackSettleParams(m_serialCStr, &safeTrackSettleParams);
+    if (!okOrLog("KVS_SetTrackSettleParams", m_serial, err, errOut))
+    {
+        close();
+        return false;
+    }
+
+    err = KVS_RequestSettings(m_serialCStr);
+    qDebug() << "KVSStage::open KVS_RequestSettings after runtime defaults err=" << err;
+    if (!okOrLog("KVS_RequestSettings(after defaults)", m_serial, err, errOut))
+    {
+        close();
+        return false;
+    }
     sleepMs(300);
 
     MOT_BrushlessTrackSettleParameters trackSettleParams = {};

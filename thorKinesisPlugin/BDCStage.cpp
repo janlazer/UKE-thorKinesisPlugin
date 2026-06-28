@@ -24,10 +24,22 @@ constexpr double kPositionToleranceUm = 0.5;
 // ThorlabsDefaultSettings.xml, DeviceSettingsDefinition Name="M30 Series":
 // Pitch=1.0 mm, StepsPerRev=10000, GearboxRatio=1, MinPos=-15 mm, MaxPos=+15 mm.
 // This yields 0.0001 mm/device-unit = 0.1 um/device-unit.
+constexpr const char* kBdcM30SettingsName = "M30 Series";
 constexpr double kBdcM30ExpectedStepsPerRev = 10000.0;
 constexpr double kBdcM30ExpectedGearboxRatio = 1.0;
 constexpr double kBdcM30ExpectedPitchMm = 1.0;
 constexpr double kBdcM30ExpectedUmPerDeviceUnit = 0.1;
+constexpr double kBdcM30MinTravelMm = -15.0;
+constexpr double kBdcM30MaxTravelMm = 15.0;
+constexpr int kBdcM30MinPositionDeviceUnits = -150000;
+constexpr int kBdcM30MaxPositionDeviceUnits = 150000;
+constexpr double kBdcM30MoveAccelerationMmS2 = 5.0;
+constexpr double kBdcM30MoveMaxVelocityMmS = 2.3;
+constexpr double kBdcM30MotorMaxVelocityMmS = 2.6;
+constexpr double kBdcM30MotorMaxAccelerationMmS2 = 5.0;
+constexpr double kBdcM30JogStepMm = 0.5;
+constexpr double kBdcM30JogAccelerationMmS2 = 4.0;
+constexpr double kBdcM30JogMaxVelocityMmS = 2.6;
 constexpr double kBdcM30MotorParamRelTolerance = 0.02;
 constexpr double kBdcM30ScaleRelTolerance = 0.25;
 constexpr double kBdcM30MaxSingleRelativeMoveUm = 1000.0;
@@ -221,10 +233,122 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
     // settings, polling, enabling or homing fail later in this method.
     m_isOpen = true;
 
+    auto convertM30RuntimeDefault = [&](short ch, double value, int unitType, const char* label, int& deviceUnits) -> bool
+    {
+        deviceUnits = 0;
+        err = BDC_GetDeviceUnitFromRealValue(m_serialCStr, ch, value, &deviceUnits, unitType);
+        qDebug() << "BDCStage::open BDC_GetDeviceUnitFromRealValue runtime default ch=" << ch
+            << "label=" << label
+            << "value=" << value
+            << "unitType=" << unitType
+            << "deviceUnits=" << deviceUnits
+            << "err=" << err;
+        if (!okOrLog("BDC_GetDeviceUnitFromRealValue(runtime default)", m_serial, err, ch, errOut))
+            return false;
+
+        if (deviceUnits <= 0)
+        {
+            qDebug() << "BDCStage::open invalid M30XY runtime default conversion serial=" << m_serialCStr
+                << "ch=" << ch
+                << "label=" << label
+                << "value=" << value
+                << "unitType=" << unitType
+                << "deviceUnits=" << deviceUnits;
+            if (errOut) *errOut = kErrInvalidState;
+            return false;
+        }
+
+        return true;
+    };
+
+    auto applyM30RuntimeDefaults = [&](short ch) -> bool
+    {
+        qDebug() << "BDCStage::open applying M30XY safe runtime defaults serial=" << m_serialCStr
+            << "ch=" << ch;
+
+        err = BDC_SetMotorTravelMode(m_serialCStr, ch, MOT_Linear);
+        if (!okOrLog("BDC_SetMotorTravelMode", m_serial, err, ch, errOut))
+            return false;
+
+        err = BDC_SetMotorParamsExt(
+            m_serialCStr,
+            ch,
+            kBdcM30ExpectedStepsPerRev,
+            kBdcM30ExpectedGearboxRatio,
+            kBdcM30ExpectedPitchMm);
+        if (!okOrLog("BDC_SetMotorParamsExt", m_serial, err, ch, errOut))
+            return false;
+
+        err = BDC_SetMotorTravelLimits(m_serialCStr, ch, kBdcM30MinTravelMm, kBdcM30MaxTravelMm);
+        if (!okOrLog("BDC_SetMotorTravelLimits", m_serial, err, ch, errOut))
+            return false;
+
+        err = BDC_SetMotorVelocityLimits(
+            m_serialCStr,
+            ch,
+            kBdcM30MotorMaxVelocityMmS,
+            kBdcM30MotorMaxAccelerationMmS2);
+        if (!okOrLog("BDC_SetMotorVelocityLimits", m_serial, err, ch, errOut))
+            return false;
+
+        err = BDC_SetStageAxisLimits(
+            m_serialCStr,
+            ch,
+            kBdcM30MinPositionDeviceUnits,
+            kBdcM30MaxPositionDeviceUnits);
+        if (!okOrLog("BDC_SetStageAxisLimits", m_serial, err, ch, errOut))
+            return false;
+
+        BDC_SetLimitsSoftwareApproachPolicy(m_serialCStr, ch, DisallowIllegalMoves);
+
+        int moveAccelerationDevice = 0;
+        int moveMaxVelocityDevice = 0;
+        if (!convertM30RuntimeDefault(ch, kBdcM30MoveAccelerationMmS2, 2, "move acceleration", moveAccelerationDevice)
+            || !convertM30RuntimeDefault(ch, kBdcM30MoveMaxVelocityMmS, 1, "move max velocity", moveMaxVelocityDevice))
+        {
+            return false;
+        }
+
+        MOT_VelocityParameters velocityParams = {};
+        velocityParams.minVelocity = 0;
+        velocityParams.acceleration = moveAccelerationDevice;
+        velocityParams.maxVelocity = moveMaxVelocityDevice;
+
+        err = BDC_SetVelParamsBlock(m_serialCStr, ch, &velocityParams);
+        if (!okOrLog("BDC_SetVelParamsBlock", m_serial, err, ch, errOut))
+            return false;
+
+        int jogStepDevice = 0;
+        int jogAccelerationDevice = 0;
+        int jogMaxVelocityDevice = 0;
+        if (!convertM30RuntimeDefault(ch, kBdcM30JogStepMm, 0, "jog step", jogStepDevice)
+            || !convertM30RuntimeDefault(ch, kBdcM30JogAccelerationMmS2, 2, "jog acceleration", jogAccelerationDevice)
+            || !convertM30RuntimeDefault(ch, kBdcM30JogMaxVelocityMmS, 1, "jog max velocity", jogMaxVelocityDevice))
+        {
+            return false;
+        }
+
+        MOT_JogParameters jogParams = {};
+        jogParams.mode = MOT_SingleStep;
+        jogParams.stepSize = static_cast<unsigned int>(jogStepDevice);
+        jogParams.velParams.minVelocity = 0;
+        jogParams.velParams.acceleration = jogAccelerationDevice;
+        jogParams.velParams.maxVelocity = jogMaxVelocityDevice;
+        jogParams.stopMode = MOT_Profiled;
+
+        err = BDC_SetJogParamsBlock(m_serialCStr, ch, &jogParams);
+        if (!okOrLog("BDC_SetJogParamsBlock", m_serial, err, ch, errOut))
+            return false;
+
+        return true;
+    };
+
     for (short ch = 1; ch <= 2; ++ch)
     {
-        const bool loaded = BDC_LoadSettings(m_serialCStr, ch);
-        qDebug() << "BDCStage::open BDC_LoadSettings ch=" << ch << "loaded=" << loaded;
+        const bool loaded = BDC_LoadNamedSettings(m_serialCStr, ch, kBdcM30SettingsName);
+        qDebug() << "BDCStage::open BDC_LoadNamedSettings ch=" << ch
+            << "settingsName=" << kBdcM30SettingsName
+            << "loaded=" << loaded;
         if (!loaded)
         {
             if (errOut) *errOut = kErrInvalidState;
@@ -235,6 +359,20 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
         err = BDC_RequestSettings(m_serialCStr, ch);
         qDebug() << "BDCStage::open BDC_RequestSettings ch=" << ch << "err = " << err;
         if (!okOrLog("BDC_RequestSettings", m_serial, err, ch, errOut))
+        {
+            close();
+            return false;
+        }
+
+        if (!applyM30RuntimeDefaults(ch))
+        {
+            close();
+            return false;
+        }
+
+        err = BDC_RequestSettings(m_serialCStr, ch);
+        qDebug() << "BDCStage::open BDC_RequestSettings after runtime defaults ch=" << ch << "err = " << err;
+        if (!okOrLog("BDC_RequestSettings(after runtime defaults)", m_serial, err, ch, errOut))
         {
             close();
             return false;

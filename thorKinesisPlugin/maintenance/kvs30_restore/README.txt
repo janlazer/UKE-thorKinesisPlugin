@@ -85,7 +85,7 @@ Default-Zielwerte
 Das Skript verwendet fuer KVS30/M u.a. diese Defaultwerte:
 
 - Serial: 24522994
-- SettingsName: KVS30/M
+- SettingsName: KVS30
 - Motor scale: 20000 device units/mm
 - Travel range: 0..30 mm
 - Stage axis limits: 0..600000 device units

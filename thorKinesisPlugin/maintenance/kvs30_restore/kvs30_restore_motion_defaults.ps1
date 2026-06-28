@@ -24,7 +24,9 @@ param(
     [string]$Serial = "24522994",
     [ValidateSet("Query", "Restore")]
     [string]$Action = "Query",
-    [string]$SettingsName = "KVS30/M",
+    [string]$SettingsName = "KVS30",
+    [ValidateSet("Stored", "Named", "None")]
+    [string]$QuerySettingsSource = "Stored",
     [int]$MinDeviceUnits = 0,
     [int]$MaxDeviceUnits = 600000,
     [double]$MinTravelMm = 0.0,
@@ -40,6 +42,8 @@ param(
     [int]$TrackSettleSettledError = 20,
     [int]$TrackSettleMaxTrackingError = 0,
     [switch]$SkipLoadNamedSettings,
+    [switch]$SkipMotorTravelMode,
+    [switch]$ResetStageToDefaults,
     [switch]$Persist,
     [switch]$Force,
     [string]$KinesisDir
@@ -109,7 +113,16 @@ public static class KvsRestoreNative
     public static extern bool KVS_LoadNamedSettings(string serialNo, string settingsName);
 
     [DllImport("Thorlabs.MotionControl.VerticalStage.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern bool KVS_LoadSettings(string serialNo);
+
+    [DllImport("Thorlabs.MotionControl.VerticalStage.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
     public static extern bool KVS_PersistSettings(string serialNo);
+
+    [DllImport("Thorlabs.MotionControl.VerticalStage.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern short KVS_ResetStageToDefaults(string serialNo);
+
+    [DllImport("Thorlabs.MotionControl.VerticalStage.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern short KVS_RequestSettings(string serialNo);
 
     [DllImport("Thorlabs.MotionControl.VerticalStage.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
     public static extern UInt32 KVS_GetStatusBits(string serialNo);
@@ -210,6 +223,20 @@ function Convert-ToDeviceUnits {
 }
 
 function Read-KvsState {
+    $loadSettingsResult = $null
+    $loadNamedSettingsResult = $null
+    if ($QuerySettingsSource -eq "Stored") {
+        $loadSettingsResult = [KvsRestoreNative]::KVS_LoadSettings($Serial)
+        Start-Sleep -Milliseconds 300
+    }
+    elseif ($QuerySettingsSource -eq "Named") {
+        $loadNamedSettingsResult = [KvsRestoreNative]::KVS_LoadNamedSettings($Serial, $SettingsName)
+        Start-Sleep -Milliseconds 300
+    }
+
+    $settingsRequestErr = [KvsRestoreNative]::KVS_RequestSettings($Serial)
+    Start-Sleep -Milliseconds 300
+
     $spr = 0.0
     $gear = 0.0
     $pitch = 0.0
@@ -238,6 +265,10 @@ function Read-KvsState {
 
     [pscustomobject]@{
         Serial = $Serial
+        QuerySettingsSource = $QuerySettingsSource
+        LoadSettingsResult = $loadSettingsResult
+        LoadNamedSettingsResult = $loadNamedSettingsResult
+        RequestSettingsErr = $settingsRequestErr
         StatusBitsHex = ("0x{0:X8}" -f [uint32][KvsRestoreNative]::KVS_GetStatusBits($Serial))
         PositionDeviceUnits = [KvsRestoreNative]::KVS_GetPosition($Serial)
         MotorParamsErr = $motorErr
@@ -280,6 +311,11 @@ function Restore-KvsDefaults {
         throw "Stage is moving according to status bits 0x$('{0:X8}' -f $bits). Refusing to write settings."
     }
 
+    if ($ResetStageToDefaults) {
+        Assert-Ok "KVS_ResetStageToDefaults" ([KvsRestoreNative]::KVS_ResetStageToDefaults($Serial))
+        Start-Sleep -Milliseconds 500
+    }
+
     if (-not $SkipLoadNamedSettings) {
         $loaded = [KvsRestoreNative]::KVS_LoadNamedSettings($Serial, $SettingsName)
         Write-Host "KVS_LoadNamedSettings('$SettingsName') returned: $loaded"
@@ -289,7 +325,12 @@ function Restore-KvsDefaults {
         Start-Sleep -Milliseconds 500
     }
 
-    Assert-Ok "KVS_SetMotorTravelMode(linear)" ([KvsRestoreNative]::KVS_SetMotorTravelMode($Serial, 1))
+    if ($SkipMotorTravelMode) {
+        Write-Host "Skipping KVS_SetMotorTravelMode(linear)."
+    }
+    else {
+        Assert-Ok "KVS_SetMotorTravelMode(linear)" ([KvsRestoreNative]::KVS_SetMotorTravelMode($Serial, 1))
+    }
     Assert-Ok "KVS_SetMotorParamsExt" ([KvsRestoreNative]::KVS_SetMotorParamsExt($Serial, $StepsPerRev, $GearboxRatio, $PitchMm))
     Assert-Ok "KVS_SetMotorTravelLimits" ([KvsRestoreNative]::KVS_SetMotorTravelLimits($Serial, $MinTravelMm, $MaxTravelMm))
     Assert-Ok "KVS_SetMotorVelocityLimits" ([KvsRestoreNative]::KVS_SetMotorVelocityLimits($Serial, $MotorMaxVelocityMmS, $MotorMaxAccelerationMmS2))
