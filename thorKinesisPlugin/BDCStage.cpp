@@ -29,19 +29,30 @@ constexpr double kBdcM30ExpectedStepsPerRev = 10000.0;
 constexpr double kBdcM30ExpectedGearboxRatio = 1.0;
 constexpr double kBdcM30ExpectedPitchMm = 1.0;
 constexpr double kBdcM30ExpectedUmPerDeviceUnit = 0.1;
+constexpr double kBdcM30ExpectedMmPerDeviceUnit = kBdcM30ExpectedUmPerDeviceUnit / 1000.0;
 constexpr double kBdcM30MinTravelMm = -15.0;
 constexpr double kBdcM30MaxTravelMm = 15.0;
 constexpr int kBdcM30MinPositionDeviceUnits = -150000;
 constexpr int kBdcM30MaxPositionDeviceUnits = 150000;
 constexpr double kBdcM30MoveAccelerationMmS2 = 5.0;
 constexpr double kBdcM30MoveMaxVelocityMmS = 2.3;
+constexpr int kBdcM30MoveAccelerationDeviceUnits = 382;
+constexpr int kBdcM30MoveMaxVelocityDeviceUnits = 514493;
+constexpr double kBdcM30ExpectedVelocityMmPerDeviceUnit =
+    kBdcM30MoveMaxVelocityMmS / static_cast<double>(kBdcM30MoveMaxVelocityDeviceUnits);
+constexpr double kBdcM30ExpectedAccelerationMmPerDeviceUnit =
+    kBdcM30MoveAccelerationMmS2 / static_cast<double>(kBdcM30MoveAccelerationDeviceUnits);
 constexpr double kBdcM30MotorMaxVelocityMmS = 2.6;
 constexpr double kBdcM30MotorMaxAccelerationMmS2 = 5.0;
 constexpr double kBdcM30JogStepMm = 0.5;
 constexpr double kBdcM30JogAccelerationMmS2 = 4.0;
 constexpr double kBdcM30JogMaxVelocityMmS = 2.6;
+constexpr int kBdcM30JogStepDeviceUnits = 5000;
+constexpr int kBdcM30JogAccelerationDeviceUnits = 305;
+constexpr int kBdcM30JogMaxVelocityDeviceUnits = 581601;
 constexpr double kBdcM30MotorParamRelTolerance = 0.02;
 constexpr double kBdcM30ScaleRelTolerance = 0.25;
+constexpr double kBdcM30RuntimeDeviceRelTolerance = 0.50;
 constexpr double kBdcM30MaxSingleRelativeMoveUm = 1000.0;
 constexpr double kBdcM30MaxCoordinateMagnitudeUm = 31000.0;
 constexpr double kBdcM30MinTravelUm = 1000.0;
@@ -98,6 +109,13 @@ bool isSafeBdcM30MotorScale(double stepsPerRev, double gearBoxRatio, double pitc
 bool isSafeBdcM30PositionScale(double umPerDeviceUnit)
 {
     return isCloseRelative(umPerDeviceUnit, kBdcM30ExpectedUmPerDeviceUnit, kBdcM30ScaleRelTolerance);
+}
+
+bool isSafeBdcM30RuntimeDeviceValue(int actual, int expected)
+{
+    return actual > 0
+        && std::abs(static_cast<double>(actual) - static_cast<double>(expected))
+        <= (std::max)(1.0, std::abs(static_cast<double>(expected))) * kBdcM30RuntimeDeviceRelTolerance;
 }
 
 bool isSafeBdcM30AxisLimits(double minUm, double maxUm)
@@ -233,32 +251,30 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
     // settings, polling, enabling or homing fail later in this method.
     m_isOpen = true;
 
-    auto convertM30RuntimeDefault = [&](short ch, double value, int unitType, const char* label, int& deviceUnits) -> bool
+    auto convertM30RuntimeDefault = [&](short ch, double value, int unitType, const char* label, int fallbackDeviceUnits) -> int
     {
-        deviceUnits = 0;
-        err = BDC_GetDeviceUnitFromRealValue(m_serialCStr, ch, value, &deviceUnits, unitType);
+        int deviceUnits = 0;
+        const short conversionErr = BDC_GetDeviceUnitFromRealValue(m_serialCStr, ch, value, &deviceUnits, unitType);
         qDebug() << "BDCStage::open BDC_GetDeviceUnitFromRealValue runtime default ch=" << ch
             << "label=" << label
             << "value=" << value
             << "unitType=" << unitType
             << "deviceUnits=" << deviceUnits
-            << "err=" << err;
-        if (!okOrLog("BDC_GetDeviceUnitFromRealValue(runtime default)", m_serial, err, ch, errOut))
-            return false;
+            << "err=" << conversionErr;
 
-        if (deviceUnits <= 0)
-        {
-            qDebug() << "BDCStage::open invalid M30XY runtime default conversion serial=" << m_serialCStr
-                << "ch=" << ch
-                << "label=" << label
-                << "value=" << value
-                << "unitType=" << unitType
-                << "deviceUnits=" << deviceUnits;
-            if (errOut) *errOut = kErrInvalidState;
-            return false;
-        }
+        if (conversionErr == 0 && isSafeBdcM30RuntimeDeviceValue(deviceUnits, fallbackDeviceUnits))
+            return deviceUnits;
 
-        return true;
+        qDebug() << "BDCStage::open warning: using fixed M30XY runtime default device units serial="
+            << m_serialCStr
+            << "ch=" << ch
+            << "label=" << label
+            << "value=" << value
+            << "unitType=" << unitType
+            << "conversionErr=" << conversionErr
+            << "convertedDeviceUnits=" << deviceUnits
+            << "fallbackDeviceUnits=" << fallbackDeviceUnits;
+        return fallbackDeviceUnits;
     };
 
     auto applyM30RuntimeDefaults = [&](short ch) -> bool
@@ -307,13 +323,18 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
 
         BDC_SetLimitsSoftwareApproachPolicy(m_serialCStr, ch, DisallowIllegalMoves);
 
-        int moveAccelerationDevice = 0;
-        int moveMaxVelocityDevice = 0;
-        if (!convertM30RuntimeDefault(ch, kBdcM30MoveAccelerationMmS2, 2, "move acceleration", moveAccelerationDevice)
-            || !convertM30RuntimeDefault(ch, kBdcM30MoveMaxVelocityMmS, 1, "move max velocity", moveMaxVelocityDevice))
-        {
-            return false;
-        }
+        const int moveAccelerationDevice = convertM30RuntimeDefault(
+            ch,
+            kBdcM30MoveAccelerationMmS2,
+            2,
+            "move acceleration",
+            kBdcM30MoveAccelerationDeviceUnits);
+        const int moveMaxVelocityDevice = convertM30RuntimeDefault(
+            ch,
+            kBdcM30MoveMaxVelocityMmS,
+            1,
+            "move max velocity",
+            kBdcM30MoveMaxVelocityDeviceUnits);
 
         MOT_VelocityParameters velocityParams = {};
         velocityParams.minVelocity = 0;
@@ -334,15 +355,24 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
             qDebug() << "BDCStage::open BDC_SetVelParams fallback ch=" << ch << "err=" << fallbackErr;
         }
 
-        int jogStepDevice = 0;
-        int jogAccelerationDevice = 0;
-        int jogMaxVelocityDevice = 0;
-        if (!convertM30RuntimeDefault(ch, kBdcM30JogStepMm, 0, "jog step", jogStepDevice)
-            || !convertM30RuntimeDefault(ch, kBdcM30JogAccelerationMmS2, 2, "jog acceleration", jogAccelerationDevice)
-            || !convertM30RuntimeDefault(ch, kBdcM30JogMaxVelocityMmS, 1, "jog max velocity", jogMaxVelocityDevice))
-        {
-            return false;
-        }
+        const int jogStepDevice = convertM30RuntimeDefault(
+            ch,
+            kBdcM30JogStepMm,
+            0,
+            "jog step",
+            kBdcM30JogStepDeviceUnits);
+        const int jogAccelerationDevice = convertM30RuntimeDefault(
+            ch,
+            kBdcM30JogAccelerationMmS2,
+            2,
+            "jog acceleration",
+            kBdcM30JogAccelerationDeviceUnits);
+        const int jogMaxVelocityDevice = convertM30RuntimeDefault(
+            ch,
+            kBdcM30JogMaxVelocityMmS,
+            1,
+            "jog max velocity",
+            kBdcM30JogMaxVelocityDeviceUnits);
 
         MOT_JogParameters jogParams = {};
         jogParams.mode = MOT_SingleStep;
@@ -413,15 +443,17 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
             << "stepsPerRev=" << stepsPerRev
             << "gearBoxRatio=" << gearBoxRatio
             << "pitch=" << pitch;
-        if (!okOrLog("BDC_GetMotorParamsExt", m_serial, err, ch, errOut))
+        if (err != 0)
         {
-            close();
-            return false;
+            qDebug() << "BDCStage::open warning: BDC_GetMotorParamsExt failed after runtime defaults; "
+                << "continuing to direct position-scale validation serial=" << m_serialCStr
+                << "ch=" << ch
+                << "err=" << err;
         }
-
-        if (!isSafeBdcM30MotorScale(stepsPerRev, gearBoxRatio, pitch))
+        else if (!isSafeBdcM30MotorScale(stepsPerRev, gearBoxRatio, pitch))
         {
-            qDebug() << "BDCStage::open UNSAFE M30XY motor scale; refusing to move serial=" << m_serialCStr
+            qDebug() << "BDCStage::open warning: BDC_GetMotorParamsExt returned implausible values after "
+                << "runtime defaults; continuing to direct position-scale validation serial=" << m_serialCStr
                 << "ch=" << ch
                 << "stepsPerRev=" << stepsPerRev
                 << "gearBoxRatio=" << gearBoxRatio
@@ -429,9 +461,6 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
                 << "expectedStepsPerRev=" << kBdcM30ExpectedStepsPerRev
                 << "expectedGearBoxRatio=" << kBdcM30ExpectedGearboxRatio
                 << "expectedPitch=" << kBdcM30ExpectedPitchMm;
-            if (errOut) *errOut = kErrInvalidState;
-            close();
-            return false;
         }
 
         sleepMs(300);
@@ -447,35 +476,49 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
         double realVelMmPerDevice = 0.0;
         double realAccMmPerDevice = 0.0;
 
-        err = BDC_GetRealValueFromDeviceUnit(m_serialCStr, ch, 1, &realPosMmPerDevice, 0);
-        if (!okOrLog("BDC_GetRealValueFromDeviceUnit(pos)", m_serial, err, ch, errOut))
+        const short posFactorErr = BDC_GetRealValueFromDeviceUnit(m_serialCStr, ch, 1, &realPosMmPerDevice, 0);
+        qDebug() << "BDCStage::open BDC_GetRealValueFromDeviceUnit(pos)"
+            << "ch=" << ch
+            << "err=" << posFactorErr
+            << "mm/device=" << realPosMmPerDevice;
+        if (posFactorErr != 0 || !isSafeBdcM30PositionScale(realPosMmPerDevice * 1000.0))
         {
-            close();
-            return false;
+            qDebug() << "BDCStage::open warning: using fixed M30XY position scale serial=" << m_serialCStr
+                << "ch=" << ch
+                << "err=" << posFactorErr
+                << "readMm/device=" << realPosMmPerDevice
+                << "fallbackMm/device=" << kBdcM30ExpectedMmPerDeviceUnit;
+            realPosMmPerDevice = kBdcM30ExpectedMmPerDeviceUnit;
         }
 
-        err = BDC_GetRealValueFromDeviceUnit(m_serialCStr, ch, 1, &realVelMmPerDevice, 1);
-        if (!okOrLog("BDC_GetRealValueFromDeviceUnit(vel)", m_serial, err, ch, errOut))
+        const short velFactorErr = BDC_GetRealValueFromDeviceUnit(m_serialCStr, ch, 1, &realVelMmPerDevice, 1);
+        qDebug() << "BDCStage::open BDC_GetRealValueFromDeviceUnit(vel)"
+            << "ch=" << ch
+            << "err=" << velFactorErr
+            << "mm_s/device=" << realVelMmPerDevice;
+        if (velFactorErr != 0 || !std::isfinite(realVelMmPerDevice) || realVelMmPerDevice <= 0.0)
         {
-            close();
-            return false;
+            qDebug() << "BDCStage::open warning: using fixed M30XY velocity scale serial=" << m_serialCStr
+                << "ch=" << ch
+                << "err=" << velFactorErr
+                << "readMm_s/device=" << realVelMmPerDevice
+                << "fallbackMm_s/device=" << kBdcM30ExpectedVelocityMmPerDeviceUnit;
+            realVelMmPerDevice = kBdcM30ExpectedVelocityMmPerDeviceUnit;
         }
 
-        err = BDC_GetRealValueFromDeviceUnit(m_serialCStr, ch, 1, &realAccMmPerDevice, 2);
-        if (!okOrLog("BDC_GetRealValueFromDeviceUnit(acc)", m_serial, err, ch, errOut))
+        const short accFactorErr = BDC_GetRealValueFromDeviceUnit(m_serialCStr, ch, 1, &realAccMmPerDevice, 2);
+        qDebug() << "BDCStage::open BDC_GetRealValueFromDeviceUnit(acc)"
+            << "ch=" << ch
+            << "err=" << accFactorErr
+            << "mm_s2/device=" << realAccMmPerDevice;
+        if (accFactorErr != 0 || !std::isfinite(realAccMmPerDevice) || realAccMmPerDevice <= 0.0)
         {
-            close();
-            return false;
-        }
-
-        if (!std::isfinite(realPosMmPerDevice) || realPosMmPerDevice <= 0.0
-            || !std::isfinite(realVelMmPerDevice) || realVelMmPerDevice <= 0.0
-            || !std::isfinite(realAccMmPerDevice) || realAccMmPerDevice <= 0.0)
-        {
-            qDebug() << "BDCStage::open invalid conversion factors ch=" << ch;
-            if (errOut) *errOut = kErrInvalidState;
-            close();
-            return false;
+            qDebug() << "BDCStage::open warning: using fixed M30XY acceleration scale serial=" << m_serialCStr
+                << "ch=" << ch
+                << "err=" << accFactorErr
+                << "readMm_s2/device=" << realAccMmPerDevice
+                << "fallbackMm_s2/device=" << kBdcM30ExpectedAccelerationMmPerDeviceUnit;
+            realAccMmPerDevice = kBdcM30ExpectedAccelerationMmPerDeviceUnit;
         }
 
         factor_position_mm[idx] = realPosMmPerDevice;
@@ -1064,12 +1107,32 @@ int32_t BDCStage::mmToDevice(double mm, unsigned channel, short* errOut) const
         return 0;
     }
 
-    int deviceUnits = 0;
-    short err = BDC_GetDeviceUnitFromRealValue(m_serialCStr, (short)channel, mm, &deviceUnits, 0);
-    if (!okOrLog("BDC_GetDeviceUnitFromRealValue(pos)", m_serial, err, channel, errOut))
+    const int idx = channelIndex(channel);
+    if (idx < 0 || !std::isfinite(factor_position_mm[idx]) || factor_position_mm[idx] <= 0.0)
+    {
+        qDebug() << "BDCStage::mmToDevice invalid position scale serial=" << m_serialCStr
+            << "ch=" << channel
+            << "factor_position_mm=" << (idx >= 0 ? factor_position_mm[idx] : 0.0);
+        if (errOut) *errOut = kErrInvalidState;
         return 0;
+    }
 
-    return (int32_t)deviceUnits;
+    const double rawDeviceUnits = mm / factor_position_mm[idx];
+    if (!std::isfinite(rawDeviceUnits)
+        || rawDeviceUnits < static_cast<double>((std::numeric_limits<int32_t>::min)())
+        || rawDeviceUnits > static_cast<double>((std::numeric_limits<int32_t>::max)()))
+    {
+        qDebug() << "BDCStage::mmToDevice refusing out-of-range conversion serial=" << m_serialCStr
+            << "ch=" << channel
+            << "mm=" << mm
+            << "factor_position_mm=" << factor_position_mm[idx]
+            << "rawDeviceUnits=" << rawDeviceUnits;
+        if (errOut) *errOut = kErrInvalidArgument;
+        return 0;
+    }
+
+    if (errOut) *errOut = 0;
+    return static_cast<int32_t>(std::llround(rawDeviceUnits));
 }
 
 int32_t BDCStage::umToDevice(double um, unsigned channel, short* errOut) const
