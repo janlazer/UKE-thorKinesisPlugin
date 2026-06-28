@@ -447,7 +447,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
 
         axisUi.serial = new QLabel(ax.baseSerial, frame);
         axisUi.positionEdit = new QLineEdit("0", frame);
-        axisUi.stepEdit = new QLineEdit("100", frame);
+        axisUi.stepEdit = new QLineEdit(ax.isM30xy ? "100" : "10", frame);
         axisUi.positionValue = new QLabel("n/a", frame);
         axisUi.positionValue->setMinimumWidth(90);
 
@@ -741,7 +741,7 @@ bool thorlabsKinesisPlugin::initialize()
         short err = 0;
         qDebug() << qPrintable(className + "::" + methodName) << "- opening KVS serial" << s;
 
-        const bool openedNow = kvsForSerial(s)->open(s.toStdString(), true, &err);
+        const bool openedNow = kvsForSerial(s)->open(s.toStdString(), false, &err);
         qDebug() << qPrintable(className + "::" + methodName)
             << "- KVS serial" << s << "openResult(openedNow)=" << openedNow << "err=" << err;
 
