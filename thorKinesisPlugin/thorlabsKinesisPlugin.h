@@ -29,6 +29,7 @@ class QFrame;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QTimer;
 
 class thorlabsKinesisPlugin : public IScanStage
 {
@@ -117,7 +118,6 @@ private:
         QPushButton* moveButton = nullptr;
         QPushButton* stepDownButton = nullptr;
         QPushButton* stepUpButton = nullptr;
-        QPushButton* getPositionButton = nullptr;
         QPushButton* applyTriggerButton = nullptr;
         QPushButton* disableTriggerButton = nullptr;
     };
@@ -128,6 +128,7 @@ private:
     void clearAxisFrames();
     void selectAxis(int id);
     void refreshAxisPositionUi(int id);
+    void refreshAllAxisPositionsUi();
     void syncLegacyMotionInputsFromAxisUi(int id);
     void syncLegacyTriggerInputsFromAxisUi(int id);
     void setMotionUiBusy(bool busy);
@@ -165,6 +166,7 @@ private:
 
     std::array<double, 3> m_lastPositionsUm{ 0.0, 0.0, 0.0 };
     QThread* m_motionThread = nullptr;
+    QTimer* m_positionRefreshTimer = nullptr;
     bool m_guiInitialized = false;
     std::atomic_bool m_motionTaskActive{ false };
     std::atomic_bool m_stopRequested{ false };

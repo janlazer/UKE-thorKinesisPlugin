@@ -26,6 +26,7 @@ namespace
 {
     constexpr double kMaximumLaserTriggerFrequencyHz = 20.0;
     constexpr double kScanLineAxisToleranceUm = 1e-6;
+    constexpr int kPositionRefreshIntervalMs = 1000;
 
     ScanValidationResult scanValidationError(ScanValidationError error,
         std::size_t layerIndex = 0,
@@ -216,7 +217,6 @@ void thorlabsKinesisPlugin::setMotionUiBusy(bool busy)
     ui.pushButton_position->setEnabled(!busy);
     ui.pushButton_stepUp->setEnabled(!busy);
     ui.pushButton_stepDown->setEnabled(!busy);
-    ui.pushButton_getPosition->setEnabled(!busy);
     ui.pushButton_applyTrigger->setEnabled(!busy);
     ui.pushButton_disableTrigger->setEnabled(!busy);
     ui.pushButton_stop->setEnabled(busy || isInitialized());
@@ -232,7 +232,6 @@ void thorlabsKinesisPlugin::setMotionUiBusy(bool busy)
         if (axisUi.moveButton) axisUi.moveButton->setEnabled(axisControlsEnabled);
         if (axisUi.stepDownButton) axisUi.stepDownButton->setEnabled(axisControlsEnabled);
         if (axisUi.stepUpButton) axisUi.stepUpButton->setEnabled(axisControlsEnabled);
-        if (axisUi.getPositionButton) axisUi.getPositionButton->setEnabled(axisControlsEnabled);
         if (axisUi.applyTriggerButton) axisUi.applyTriggerButton->setEnabled(triggerControlsEnabled);
         if (axisUi.disableTriggerButton) axisUi.disableTriggerButton->setEnabled(triggerControlsEnabled);
     }
@@ -276,8 +275,7 @@ void thorlabsKinesisPlugin::startMotionTask(const QString& operation, std::funct
             m_motionThread = nullptr;
             m_motionTaskActive.store(false);
             setMotionUiBusy(false);
-            for (int id = 0; id < m_axisUi.size(); ++id)
-                refreshAxisPositionUi(id);
+            refreshAllAxisPositionsUi();
         }
         thread->deleteLater();
     });
@@ -402,6 +400,15 @@ void thorlabsKinesisPlugin::refreshAxisPositionUi(int id)
         ui.label_positionValue->setText(text);
 }
 
+void thorlabsKinesisPlugin::refreshAllAxisPositionsUi()
+{
+    if (!dock || !isInitialized())
+        return;
+
+    for (int id = 0; id < m_axisUi.size(); ++id)
+        refreshAxisPositionUi(id);
+}
+
 void thorlabsKinesisPlugin::rebuildAxisFrames()
 {
     clearAxisFrames();
@@ -455,7 +462,6 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         axisUi.moveButton = new QPushButton("Move", frame);
         axisUi.stepDownButton = new QPushButton("Step-", frame);
         axisUi.stepUpButton = new QPushButton("Step+", frame);
-        axisUi.getPositionButton = new QPushButton("Read", frame);
 
         grid->addWidget(new QLabel("Serial:", frame), 0, 0);
         grid->addWidget(axisUi.serial, 0, 1, 1, 3);
@@ -476,8 +482,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         grid->addWidget(stepButtons, 2, 2, 1, 2);
 
         grid->addWidget(new QLabel("Current:", frame), 3, 0);
-        grid->addWidget(axisUi.positionValue, 3, 1);
-        grid->addWidget(axisUi.getPositionButton, 3, 2, 1, 2);
+        grid->addWidget(axisUi.positionValue, 3, 1, 1, 3);
 
         if (ax.isM30xy)
         {
@@ -529,12 +534,6 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
             syncLegacyMotionInputsFromAxisUi(id);
             slot_moveStepForward();
         });
-        connect(axisUi.getPositionButton, &QPushButton::clicked, this, [this, id]() {
-            selectAxis(id);
-            slot_getPosition();
-            refreshAxisPositionUi(id);
-        });
-
         if (axisUi.applyTriggerButton)
         {
             connect(axisUi.applyTriggerButton, &QPushButton::clicked, this, [this, id]() {
@@ -753,6 +752,7 @@ bool thorlabsKinesisPlugin::initialize()
 
     setInitialized(okAll);
     setMotionUiBusy(false);
+    refreshAllAxisPositionsUi();
 
     qDebug() << qPrintable(className + "::" + methodName) << "- done initialized=" << isInitialized();
     return isInitialized();
@@ -1418,8 +1418,6 @@ void thorlabsKinesisPlugin::initGUI()
     connect(ui.pushButton_stepDown, &QPushButton::clicked,
         this, &thorlabsKinesisPlugin::slot_moveStepBackward, Qt::UniqueConnection);
 
-    connect(ui.pushButton_getPosition, &QPushButton::clicked,
-        this, &thorlabsKinesisPlugin::slot_getPosition, Qt::UniqueConnection);
     connect(ui.pushButton_logger, &QPushButton::clicked,
         this, &thorlabsKinesisPlugin::slot_openLogger, Qt::UniqueConnection);
 
@@ -1437,6 +1435,13 @@ void thorlabsKinesisPlugin::initGUI()
 
     rebuildAxisFrames();
     setMotionUiBusy(false);
+
+    m_positionRefreshTimer = new QTimer(this);
+    m_positionRefreshTimer->setInterval(kPositionRefreshIntervalMs);
+    m_positionRefreshTimer->setTimerType(Qt::CoarseTimer);
+    connect(m_positionRefreshTimer, &QTimer::timeout,
+        this, &thorlabsKinesisPlugin::refreshAllAxisPositionsUi, Qt::UniqueConnection);
+    m_positionRefreshTimer->start();
 
     qDebug() << className << "::initGUI - signals connected";
 }
