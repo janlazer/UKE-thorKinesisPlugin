@@ -405,7 +405,7 @@ public:
 	* @param type - output type
 	**/
 
-	OutputWindow(QString name, OutputType type) { this->name = name; this->type = type; }
+	OutputWindow(QString name, OutputType type) { this->name = name; this->type = type; this->output = NULL; this->shownOnStart = true; }
 
 	/**
 	* Destructor
