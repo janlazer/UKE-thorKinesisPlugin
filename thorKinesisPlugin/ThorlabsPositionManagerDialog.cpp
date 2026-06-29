@@ -59,7 +59,7 @@ ThorlabsPositionManagerDialog::ThorlabsPositionManagerDialog(thorlabsKinesisPlug
     m_axisTable = new QTableWidget(this);
     m_axisTable->setColumnCount(4);
     m_axisTable->setHorizontalHeaderLabels(
-        QStringList() << "Axis" << "Serial" << "Name" << "Position [um]");
+        QStringList() << "Axis" << "Serial" << "Name" << "Position [mm]");
     m_axisTable->verticalHeader()->setVisible(false);
     m_axisTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     m_axisTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
@@ -124,10 +124,10 @@ void ThorlabsPositionManagerDialog::rebuildAxisTable()
         positionEditor->setKeyboardTracking(false);
         positionEditor->setAlignment(Qt::AlignRight);
         if (axis.travelLimitsValid)
-            positionEditor->setRange(axis.minimumTravelUm, axis.maximumTravelUm);
+            positionEditor->setRange(axis.minimumTravelUm / 1000.0, axis.maximumTravelUm / 1000.0);
         else
         {
-            positionEditor->setRange(-1000000000.0, 1000000000.0);
+            positionEditor->setRange(-1000000.0, 1000000.0);
             positionEditor->setEnabled(false);
             positionEditor->setToolTip("Travel limits unavailable");
         }
@@ -202,7 +202,7 @@ void ThorlabsPositionManagerDialog::loadConfig(int comboIndex)
                 configAxisIndex >= 0 && configAxisIndex < positionsUm.size()
                 ? positionsUm[configAxisIndex]
                 : 0.0;
-            m_positionEditors[row]->setValue(positionUm);
+            m_positionEditors[row]->setValue(positionUm / 1000.0);
         }
     }
 
@@ -233,7 +233,7 @@ bool ThorlabsPositionManagerDialog::collectSelection(QVector<int>& globalAxisIDs
             continue;
 
         globalAxisIDs.append(m_axes[row].globalAxisID);
-        positionsUm.append(m_positionEditors[row]->value());
+        positionsUm.append(m_positionEditors[row]->value() * 1000.0);
     }
 
     return !globalAxisIDs.isEmpty();
@@ -300,7 +300,7 @@ void ThorlabsPositionManagerDialog::getPositions()
     {
         const double position = positions[row];
         if (std::isfinite(position))
-            m_positionEditors[row]->setValue(position);
+            m_positionEditors[row]->setValue(position / 1000.0);
         else
             allValid = false;
     }

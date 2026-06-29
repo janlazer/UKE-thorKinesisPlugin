@@ -7,8 +7,10 @@
 #define _USE_MATH_DEFINES
 #endif
 #include <cmath>
+#include <chrono>
 #include <limits>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -136,6 +138,29 @@ static bool parseFiniteDouble(const QString& s, double& value)
     return true;
 }
 
+static QString mmDisplayTextFromUm(double valueUm)
+{
+    return QString::number(valueUm / 1000.0, 'f', 3);
+}
+
+static QString mmDisplayWithUnitFromUm(double valueUm)
+{
+    return mmDisplayTextFromUm(valueUm) + QStringLiteral(" mm");
+}
+
+static QString frequencyDisplayText(double velocityMmS, double spacingMm)
+{
+    if (!std::isfinite(velocityMmS)
+        || !std::isfinite(spacingMm)
+        || velocityMmS <= 0.0
+        || spacingMm <= 0.0)
+    {
+        return QStringLiteral("n/a");
+    }
+
+    return QString::number(velocityMmS / spacingMm, 'f', 3);
+}
+
 static bool looksLikeBaseM30XYSerial(const QString& serial)
 {
     // Kinesis sometimes shows "base-1" / "base-2" for bay/channel views.
@@ -232,33 +257,54 @@ KVSStage* thorlabsKinesisPlugin::kvsForSerial(const QString& serial)
     return it->second.get();
 }
 
+bool thorlabsKinesisPlugin::isAxisUiBusy(int id) const
+{
+    return m_busyAxisIndices.contains(id) || m_axisMotionThreads.contains(id);
+}
+
+void thorlabsKinesisPlugin::setAxisControlsBusy(int id, bool busy)
+{
+    if (id < 0 || id >= m_axisUi.size())
+        return;
+
+    AxisUi& axisUi = m_axisUi[id];
+    const bool enabled = isInitialized() && !busy;
+
+    if (axisUi.homeButton) axisUi.homeButton->setEnabled(enabled);
+    if (axisUi.moveButton) axisUi.moveButton->setEnabled(enabled);
+    if (axisUi.stepDownButton) axisUi.stepDownButton->setEnabled(enabled);
+    if (axisUi.stepUpButton) axisUi.stepUpButton->setEnabled(enabled);
+    if (axisUi.positionEdit) axisUi.positionEdit->setEnabled(enabled);
+    if (axisUi.stepEdit) axisUi.stepEdit->setEnabled(enabled);
+    if (axisUi.triggerStartEdit) axisUi.triggerStartEdit->setEnabled(enabled);
+    if (axisUi.triggerIntervalEdit) axisUi.triggerIntervalEdit->setEnabled(enabled);
+    if (axisUi.triggerCountEdit) axisUi.triggerCountEdit->setEnabled(enabled);
+    if (axisUi.triggerWidthEdit) axisUi.triggerWidthEdit->setEnabled(enabled);
+    if (axisUi.triggerVelocityEdit) axisUi.triggerVelocityEdit->setEnabled(enabled);
+    if (axisUi.applyTriggerButton) axisUi.applyTriggerButton->setEnabled(enabled);
+    if (axisUi.disableTriggerButton) axisUi.disableTriggerButton->setEnabled(enabled);
+    if (axisUi.stopButton) axisUi.stopButton->setEnabled(isInitialized());
+
+    refreshAxisStatusUi(id);
+}
+
 void thorlabsKinesisPlugin::setMotionUiBusy(bool busy)
 {
-    ui.pushButton_refresh->setEnabled(!busy);
-    ui.comboBox_devices->setEnabled(!busy);
-    ui.pushButton_home->setEnabled(!busy);
-    ui.pushButton_position->setEnabled(!busy);
-    ui.pushButton_stepUp->setEnabled(!busy);
-    ui.pushButton_stepDown->setEnabled(!busy);
-    ui.pushButton_applyTrigger->setEnabled(!busy);
-    ui.pushButton_disableTrigger->setEnabled(!busy);
-    ui.pushButton_stop->setEnabled(busy || isInitialized());
-    ui.pushButton_positionManager->setEnabled(!busy && isInitialized());
+    const bool anyBusy = busy || m_motionTaskActive.load() || !m_axisMotionThreads.isEmpty();
 
-    const bool axisControlsEnabled = !busy && isInitialized();
+    ui.pushButton_refresh->setEnabled(!anyBusy);
+    ui.comboBox_devices->setEnabled(!anyBusy);
+    ui.pushButton_home->setEnabled(!anyBusy);
+    ui.pushButton_position->setEnabled(!anyBusy);
+    ui.pushButton_stepUp->setEnabled(!anyBusy);
+    ui.pushButton_stepDown->setEnabled(!anyBusy);
+    ui.pushButton_applyTrigger->setEnabled(!anyBusy);
+    ui.pushButton_disableTrigger->setEnabled(!anyBusy);
+    ui.pushButton_stop->setEnabled(anyBusy || isInitialized());
+    ui.pushButton_positionManager->setEnabled(!anyBusy && isInitialized());
+
     for (int id = 0; id < m_axisUi.size(); ++id)
-    {
-        AxisUi& axisUi = m_axisUi[id];
-        const bool triggerControlsEnabled =
-            axisControlsEnabled && id >= 0 && id < m_axes.size() && m_axes[id].isM30xy;
-
-        if (axisUi.homeButton) axisUi.homeButton->setEnabled(axisControlsEnabled);
-        if (axisUi.moveButton) axisUi.moveButton->setEnabled(axisControlsEnabled);
-        if (axisUi.stepDownButton) axisUi.stepDownButton->setEnabled(axisControlsEnabled);
-        if (axisUi.stepUpButton) axisUi.stepUpButton->setEnabled(axisControlsEnabled);
-        if (axisUi.applyTriggerButton) axisUi.applyTriggerButton->setEnabled(triggerControlsEnabled);
-        if (axisUi.disableTriggerButton) axisUi.disableTriggerButton->setEnabled(triggerControlsEnabled);
-    }
+        setAxisControlsBusy(id, busy || isAxisUiBusy(id));
 }
 
 void thorlabsKinesisPlugin::startMotionTask(const QString& operation, std::function<bool()> task)
@@ -306,19 +352,110 @@ void thorlabsKinesisPlugin::startMotionTask(const QString& operation, std::funct
     thread->start();
 }
 
+void thorlabsKinesisPlugin::startAxisMotionTask(int axisIndex, const QString& operation,
+    std::function<bool()> task, bool referencing)
+{
+    if (axisIndex < 0 || axisIndex >= m_axes.size())
+        return;
+
+    if (m_axisMotionThreads.contains(axisIndex))
+    {
+        QMessageBox::warning(dock, "Thorlabs", "This axis is already busy.");
+        return;
+    }
+
+    m_stopRequested.store(false);
+    m_busyAxisIndices.insert(axisIndex);
+    if (referencing)
+        m_referencingAxisIndices.insert(axisIndex);
+
+    QThread* thread = QThread::create([this, operation, task = std::move(task)]() mutable {
+        bool ok = false;
+        try
+        {
+            ok = task();
+        }
+        catch (...)
+        {
+            qDebug() << className << "- unhandled exception in" << operation;
+        }
+
+        if (!ok)
+        {
+            QMetaObject::invokeMethod(this, [this, operation]() {
+                QMessageBox::warning(dock, "Thorlabs", operation + " failed.");
+            }, Qt::QueuedConnection);
+        }
+    });
+
+    m_axisMotionThreads.insert(axisIndex, thread);
+    setMotionUiBusy(false);
+
+    connect(thread, &QThread::finished, this, [this, thread, axisIndex]() {
+        if (m_axisMotionThreads.value(axisIndex, nullptr) == thread)
+            m_axisMotionThreads.remove(axisIndex);
+        m_busyAxisIndices.remove(axisIndex);
+        m_referencingAxisIndices.remove(axisIndex);
+        refreshAxisPositionUi(axisIndex);
+        setAxisControlsBusy(axisIndex, false);
+        setMotionUiBusy(false);
+        thread->deleteLater();
+    });
+
+    thread->start();
+}
+
 void thorlabsKinesisPlugin::waitForMotionToFinish()
 {
     QThread* thread = m_motionThread;
-    if (!thread)
-        return;
-
-    stop();
-    while (!thread->wait(100))
+    if (thread)
+    {
         stop();
-    disconnect(thread, nullptr, this, nullptr);
-    if (m_motionThread == thread) m_motionThread = nullptr;
-    m_motionTaskActive.store(false);
-    delete thread;
+        while (!thread->wait(100))
+            stop();
+        disconnect(thread, nullptr, this, nullptr);
+        if (m_motionThread == thread) m_motionThread = nullptr;
+        m_motionTaskActive.store(false);
+        delete thread;
+    }
+
+    const QList<QThread*> axisThreads = m_axisMotionThreads.values();
+    if (!axisThreads.isEmpty())
+        stop();
+
+    for (QThread* axisThread : axisThreads)
+    {
+        if (!axisThread)
+            continue;
+        while (!axisThread->wait(100))
+            stop();
+        disconnect(axisThread, nullptr, this, nullptr);
+        delete axisThread;
+    }
+
+    m_axisMotionThreads.clear();
+    m_busyAxisIndices.clear();
+    m_referencingAxisIndices.clear();
+    if (dock)
+        setMotionUiBusy(false);
+}
+
+bool thorlabsKinesisPlugin::waitUntilAllAxesStopped(int timeoutMs)
+{
+    const auto t0 = std::chrono::steady_clock::now();
+    while (true)
+    {
+        if (isStopped())
+            return true;
+
+        const auto now = std::chrono::steady_clock::now();
+        const int elapsed = static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count());
+        if (elapsed > timeoutMs)
+            return false;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
 }
 
 void thorlabsKinesisPlugin::closeDevices()
@@ -594,9 +731,21 @@ void thorlabsKinesisPlugin::syncLegacyMotionInputsFromAxisUi(int id)
 
     const AxisUi& axisUi = m_axisUi[id];
     if (axisUi.positionEdit)
-        ui.lineEdit_position->setText(axisUi.positionEdit->text());
+    {
+        double posMm = 0.0;
+        if (parseFiniteDouble(axisUi.positionEdit->text(), posMm))
+            ui.lineEdit_position->setText(QString::number(posMm * 1000.0, 'f', 3));
+        else
+            ui.lineEdit_position->setText(axisUi.positionEdit->text());
+    }
     if (axisUi.stepEdit)
-        ui.lineEdit_step->setText(axisUi.stepEdit->text());
+    {
+        double stepMm = 0.0;
+        if (parseFiniteDouble(axisUi.stepEdit->text(), stepMm))
+            ui.lineEdit_step->setText(QString::number(stepMm * 1000.0, 'f', 3));
+        else
+            ui.lineEdit_step->setText(axisUi.stepEdit->text());
+    }
 }
 
 void thorlabsKinesisPlugin::syncLegacyTriggerInputsFromAxisUi(int id)
@@ -606,9 +755,21 @@ void thorlabsKinesisPlugin::syncLegacyTriggerInputsFromAxisUi(int id)
 
     const AxisUi& axisUi = m_axisUi[id];
     if (axisUi.triggerStartEdit)
-        ui.lineEdit_trigStart->setText(axisUi.triggerStartEdit->text());
+    {
+        double startMm = 0.0;
+        if (parseFiniteDouble(axisUi.triggerStartEdit->text(), startMm))
+            ui.lineEdit_trigStart->setText(QString::number(startMm * 1000.0, 'f', 3));
+        else
+            ui.lineEdit_trigStart->setText(axisUi.triggerStartEdit->text());
+    }
     if (axisUi.triggerIntervalEdit)
-        ui.lineEdit_trigInterval->setText(axisUi.triggerIntervalEdit->text());
+    {
+        double intervalMm = 0.0;
+        if (parseFiniteDouble(axisUi.triggerIntervalEdit->text(), intervalMm))
+            ui.lineEdit_trigInterval->setText(QString::number(intervalMm * 1000.0, 'f', 3));
+        else
+            ui.lineEdit_trigInterval->setText(axisUi.triggerIntervalEdit->text());
+    }
     if (axisUi.triggerCountEdit)
         ui.lineEdit_trigCount->setText(axisUi.triggerCountEdit->text());
     if (axisUi.triggerWidthEdit)
@@ -622,7 +783,7 @@ void thorlabsKinesisPlugin::refreshAxisPositionUi(int id)
 
     double positionUm = 0.0;
     const QString text = readAxisPositionUm(id, positionUm)
-        ? QString::number(positionUm, 'f', 3) + " um"
+        ? mmDisplayWithUnitFromUm(positionUm)
         : QStringLiteral("n/a");
 
     if (m_axisUi[id].positionValue)
@@ -630,6 +791,118 @@ void thorlabsKinesisPlugin::refreshAxisPositionUi(int id)
 
     if (ui.comboBox_devices->currentIndex() == id)
         ui.label_positionValue->setText(text);
+
+    refreshAxisStatusUi(id);
+}
+
+bool thorlabsKinesisPlugin::readAxisMotionState(int id, bool& moving, bool& homed) const
+{
+    moving = false;
+    homed = false;
+
+    if (id < 0 || id >= m_axes.size())
+        return false;
+
+    const AxisEntry& axis = m_axes[id];
+    short err = 0;
+
+    if (axis.isM30xy)
+    {
+        auto it = m_m30xy.find(axis.baseSerial.toStdString());
+        if (it == m_m30xy.end() || !it->second || !it->second->isOpen())
+            return false;
+        const BDCStage* stage = it->second.get();
+        moving = stage->isMoving(static_cast<unsigned>(axis.channel), &err);
+        if (err != 0) return false;
+        homed = stage->isHomed(static_cast<unsigned>(axis.channel), &err);
+        return err == 0;
+    }
+
+    auto it = m_kvs.find(axis.baseSerial.toStdString());
+    if (it == m_kvs.end() || !it->second || !it->second->isOpen())
+        return false;
+    const KVSStage* stage = it->second.get();
+    moving = stage->isMoving(&err);
+    if (err != 0) return false;
+    homed = stage->isHomed(&err);
+    return err == 0;
+}
+
+void thorlabsKinesisPlugin::refreshAxisStatusUi(int id)
+{
+    if (id < 0 || id >= m_axisUi.size())
+        return;
+
+    QString text = QStringLiteral("not homed");
+    QString color = QStringLiteral("#dddddd");
+
+    if (m_referencingAxisIndices.contains(id))
+    {
+        text = QStringLiteral("referencing");
+        color = QStringLiteral("#ffd966");
+    }
+    else if (m_busyAxisIndices.contains(id))
+    {
+        text = QStringLiteral("busy");
+        color = QStringLiteral("#f4b183");
+    }
+    else
+    {
+        bool moving = false;
+        bool homed = false;
+        if (readAxisMotionState(id, moving, homed))
+        {
+            if (moving && !homed)
+            {
+                text = QStringLiteral("referencing");
+                color = QStringLiteral("#ffd966");
+            }
+            else if (moving)
+            {
+                text = QStringLiteral("busy");
+                color = QStringLiteral("#f4b183");
+            }
+            else if (homed)
+            {
+                text = QStringLiteral("homed");
+                color = QStringLiteral("#93c47d");
+            }
+        }
+        else
+        {
+            text = QStringLiteral("status n/a");
+            color = QStringLiteral("#cccccc");
+        }
+    }
+
+    if (m_axisUi[id].statusLabel)
+    {
+        m_axisUi[id].statusLabel->setText(text);
+        m_axisUi[id].statusLabel->setStyleSheet(
+            QStringLiteral("background-color: %1; color: black; border: 1px solid gray; padding: 2px 6px;")
+                .arg(color));
+    }
+}
+
+void thorlabsKinesisPlugin::updateTriggerFrequencyUi(int id)
+{
+    if (id < 0 || id >= m_axisUi.size())
+        return;
+
+    AxisUi& axisUi = m_axisUi[id];
+    if (!axisUi.triggerFrequencyValue)
+        return;
+
+    double spacingMm = 0.0;
+    double velocityMmS = 0.0;
+    const bool ok = axisUi.triggerIntervalEdit
+        && axisUi.triggerVelocityEdit
+        && parseFiniteDouble(axisUi.triggerIntervalEdit->text(), spacingMm)
+        && parseFiniteDouble(axisUi.triggerVelocityEdit->text(), velocityMmS);
+
+    axisUi.triggerFrequencyValue->setText(ok
+        ? frequencyDisplayText(velocityMmS, spacingMm)
+        : QStringLiteral("n/a"));
 }
 
 void thorlabsKinesisPlugin::refreshAllAxisPositionsUi()
@@ -678,32 +951,47 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         QFont titleFont = axisUi.title->font();
         titleFont.setBold(true);
         axisUi.title->setFont(titleFont);
-        frameLayout->addWidget(axisUi.title);
+
+        axisUi.statusLabel = new QLabel("status n/a", frame);
+        axisUi.statusLabel->setAlignment(Qt::AlignCenter);
+        axisUi.statusLabel->setMinimumWidth(90);
+
+        auto* titleRow = new QHBoxLayout();
+        titleRow->setContentsMargins(0, 0, 0, 0);
+        titleRow->addWidget(axisUi.title);
+        titleRow->addStretch(1);
+        titleRow->addWidget(axisUi.statusLabel);
+        frameLayout->addLayout(titleRow);
 
         auto* grid = new QGridLayout();
         grid->setColumnStretch(1, 1);
-        grid->setColumnStretch(3, 1);
+        grid->setColumnStretch(3, 0);
+        grid->setColumnStretch(4, 0);
 
         axisUi.serial = new QLabel(ax.baseSerial, frame);
-        axisUi.positionEdit = new QLineEdit("0", frame);
-        axisUi.stepEdit = new QLineEdit(ax.isM30xy ? "100" : "10", frame);
+        axisUi.positionEdit = new QLineEdit("0.000", frame);
+        axisUi.stepEdit = new QLineEdit(ax.isM30xy ? "0.100" : "0.010", frame);
         axisUi.positionValue = new QLabel("n/a", frame);
         axisUi.positionValue->setMinimumWidth(90);
 
         axisUi.homeButton = new QPushButton("Home", frame);
-        axisUi.moveButton = new QPushButton("Move", frame);
+        axisUi.moveButton = new QPushButton("Go", frame);
+        axisUi.moveButton->setStyleSheet("background-color: green; color: black;");
+        axisUi.stopButton = new QPushButton("Stop", frame);
+        axisUi.stopButton->setStyleSheet("background-color: red; color: black;");
         axisUi.stepDownButton = new QPushButton("Step-", frame);
         axisUi.stepUpButton = new QPushButton("Step+", frame);
 
         grid->addWidget(new QLabel("Serial:", frame), 0, 0);
-        grid->addWidget(axisUi.serial, 0, 1, 1, 3);
+        grid->addWidget(axisUi.serial, 0, 1, 1, 4);
 
-        grid->addWidget(new QLabel("Target [um]:", frame), 1, 0);
+        grid->addWidget(new QLabel("Target [mm]:", frame), 1, 0);
         grid->addWidget(axisUi.positionEdit, 1, 1);
         grid->addWidget(axisUi.moveButton, 1, 2);
-        grid->addWidget(axisUi.homeButton, 1, 3);
+        grid->addWidget(axisUi.stopButton, 1, 3);
+        grid->addWidget(axisUi.homeButton, 1, 4);
 
-        grid->addWidget(new QLabel("Step [um]:", frame), 2, 0);
+        grid->addWidget(new QLabel("Step [mm]:", frame), 2, 0);
         grid->addWidget(axisUi.stepEdit, 2, 1);
         auto* stepButtons = new QWidget(frame);
         auto* stepButtonsLayout = new QHBoxLayout(stepButtons);
@@ -711,49 +999,67 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         stepButtonsLayout->setSpacing(4);
         stepButtonsLayout->addWidget(axisUi.stepDownButton);
         stepButtonsLayout->addWidget(axisUi.stepUpButton);
-        grid->addWidget(stepButtons, 2, 2, 1, 2);
+        grid->addWidget(stepButtons, 2, 2, 1, 3);
 
         grid->addWidget(new QLabel("Current:", frame), 3, 0);
-        grid->addWidget(axisUi.positionValue, 3, 1, 1, 3);
+        grid->addWidget(axisUi.positionValue, 3, 1, 1, 4);
 
-        if (ax.isM30xy)
         {
             QString velocityText = QStringLiteral("2.000");
-            if (BDCStage* stage = m30xyForBase(ax.baseSerial))
+            short err = 0;
+            if (ax.isM30xy)
             {
-                if (stage->isOpen())
+                if (BDCStage* stage = m30xyForBase(ax.baseSerial))
                 {
-                    short err = 0;
-                    const double velocityMmS = stage->getMaxVelocityMmS(
-                        static_cast<unsigned>(ax.channel), &err);
-                    if (err == 0 && std::isfinite(velocityMmS) && velocityMmS > 0.0)
-                        velocityText = QString::number(velocityMmS, 'f', 3);
+                    if (stage->isOpen())
+                    {
+                        const double velocityMmS = stage->getMaxVelocityMmS(
+                            static_cast<unsigned>(ax.channel), &err);
+                        if (err == 0 && std::isfinite(velocityMmS) && velocityMmS > 0.0)
+                            velocityText = QString::number(velocityMmS, 'f', 3);
+                    }
+                }
+            }
+            else
+            {
+                if (KVSStage* stage = kvsForSerial(ax.baseSerial))
+                {
+                    if (stage->isOpen())
+                    {
+                        const double velocityMmS = stage->getMaxVelocityMmS(&err);
+                        if (err == 0 && std::isfinite(velocityMmS) && velocityMmS > 0.0)
+                            velocityText = QString::number(velocityMmS, 'f', 3);
+                    }
                 }
             }
 
-            axisUi.triggerStartEdit = new QLineEdit("0", frame);
-            axisUi.triggerIntervalEdit = new QLineEdit("0", frame);
+            axisUi.triggerStartEdit = new QLineEdit("0.000", frame);
+            axisUi.triggerIntervalEdit = new QLineEdit("0.100", frame);
             axisUi.triggerCountEdit = new QLineEdit("1", frame);
-            axisUi.triggerWidthEdit = new QLineEdit("50000", frame);
+            axisUi.triggerWidthEdit = new QLineEdit(ax.isM30xy ? "500" : "1000", frame);
             axisUi.triggerVelocityEdit = new QLineEdit(velocityText, frame);
+            axisUi.triggerFrequencyValue = new QLabel("n/a", frame);
+            axisUi.triggerFrequencyValue->setMinimumWidth(70);
             axisUi.applyTriggerButton = new QPushButton("Apply Trigger", frame);
             axisUi.disableTriggerButton = new QPushButton("Disable Trigger", frame);
 
-            grid->addWidget(new QLabel("Trigger start [um]:", frame), 4, 0);
+            grid->addWidget(new QLabel("Trigger start [mm]:", frame), 4, 0);
             grid->addWidget(axisUi.triggerStartEdit, 4, 1);
-            grid->addWidget(new QLabel("Spacing [um]:", frame), 4, 2);
-            grid->addWidget(axisUi.triggerIntervalEdit, 4, 3);
+            grid->addWidget(new QLabel("Spacing [mm]:", frame), 4, 2);
+            grid->addWidget(axisUi.triggerIntervalEdit, 4, 3, 1, 2);
 
             grid->addWidget(new QLabel("Pulse count:", frame), 5, 0);
             grid->addWidget(axisUi.triggerCountEdit, 5, 1);
             grid->addWidget(new QLabel("Pulse width [us]:", frame), 5, 2);
-            grid->addWidget(axisUi.triggerWidthEdit, 5, 3);
+            grid->addWidget(axisUi.triggerWidthEdit, 5, 3, 1, 2);
 
             grid->addWidget(new QLabel("Velocity [mm/s]:", frame), 6, 0);
             grid->addWidget(axisUi.triggerVelocityEdit, 6, 1);
+            grid->addWidget(new QLabel("Frequency [Hz]:", frame), 6, 2);
+            grid->addWidget(axisUi.triggerFrequencyValue, 6, 3, 1, 2);
 
             grid->addWidget(axisUi.applyTriggerButton, 7, 0, 1, 2);
-            grid->addWidget(axisUi.disableTriggerButton, 7, 2, 1, 2);
+            grid->addWidget(axisUi.disableTriggerButton, 7, 2, 1, 3);
         }
 
         frameLayout->addLayout(grid);
@@ -770,6 +1076,10 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
             selectAxis(id);
             syncLegacyMotionInputsFromAxisUi(id);
             slot_moveTo();
+        });
+        connect(axisUi.stopButton, &QPushButton::clicked, this, [this, id]() {
+            stopAxisIndex(id);
+            refreshAxisStatusUi(id);
         });
         connect(axisUi.positionEdit, &QLineEdit::returnPressed,
             axisUi.moveButton, &QPushButton::click);
@@ -799,6 +1109,20 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
                 slot_disableTrigger();
             });
         }
+
+        if (axisUi.triggerIntervalEdit)
+        {
+            connect(axisUi.triggerIntervalEdit, &QLineEdit::textChanged,
+                this, [this, id]() { updateTriggerFrequencyUi(id); });
+        }
+        if (axisUi.triggerVelocityEdit)
+        {
+            connect(axisUi.triggerVelocityEdit, &QLineEdit::textChanged,
+                this, [this, id]() { updateTriggerFrequencyUi(id); });
+        }
+
+        updateTriggerFrequencyUi(id);
+        refreshAxisStatusUi(id);
     }
 
     ui.axisFramesLayout->addStretch(1);
@@ -1056,11 +1380,13 @@ bool thorlabsKinesisPlugin::moveTo(double pos, int id)
     return moveToAxisIndex(pos, axisIndexFromPublicId(id));
 }
 
-bool thorlabsKinesisPlugin::moveToAxisIndex(double pos, int axisIndex)
+bool thorlabsKinesisPlugin::moveToAxisIndex(double pos, int axisIndex, bool waitForOtherAxes)
 {
     const QString methodName = "moveTo(pos_um,id)";
 
     if (!isInitialized() || !std::isfinite(pos) || axisIndex < 0 || axisIndex >= m_axes.size())
+        return false;
+    if (waitForOtherAxes && !waitUntilAllAxesStopped())
         return false;
     if (m_motionTaskActive.load() && m_stopRequested.load())
         return false;
@@ -1382,7 +1708,7 @@ bool thorlabsKinesisPlugin::moveAxesCoordinated(const double* values, const char
 
     if (!m_motionTaskActive.load())
         m_stopRequested.store(false);
-    if (!isStopped())
+    if (!waitUntilAllAxesStopped())
         return false;
 
     struct PendingMove
@@ -1550,11 +1876,13 @@ bool thorlabsKinesisPlugin::moveSteps(double steps, int id)
     return moveStepsAxisIndex(steps, axisIndexFromPublicId(id));
 }
 
-bool thorlabsKinesisPlugin::moveStepsAxisIndex(double steps, int axisIndex)
+bool thorlabsKinesisPlugin::moveStepsAxisIndex(double steps, int axisIndex, bool waitForOtherAxes)
 {
     const QString methodName = "moveSteps(delta_um,id)";
 
     if (!isInitialized() || !std::isfinite(steps) || axisIndex < 0 || axisIndex >= m_axes.size())
+        return false;
+    if (waitForOtherAxes && !waitUntilAllAxesStopped())
         return false;
     if (m_motionTaskActive.load() && m_stopRequested.load())
         return false;
@@ -1843,6 +2171,34 @@ bool thorlabsKinesisPlugin::stop()
     return foundOpenStage && ok;
 }
 
+bool thorlabsKinesisPlugin::stopAxisIndex(int id)
+{
+    if (id < 0 || id >= m_axes.size())
+        return false;
+
+    const AxisEntry& axis = m_axes[id];
+    short err = 0;
+
+    qDebug() << className << "::stopAxisIndex id" << id
+        << "serial" << axis.baseSerial
+        << "ch" << axis.channel;
+
+    bool ok = false;
+    if (axis.isM30xy)
+    {
+        BDCStage* stage = m30xyForBase(axis.baseSerial);
+        ok = stage && stage->isOpen()
+            && stage->stopImmediate(static_cast<unsigned>(axis.channel), &err);
+    }
+    else
+    {
+        KVSStage* stage = kvsForSerial(axis.baseSerial);
+        ok = stage && stage->isOpen() && stage->stopImmediate(&err);
+    }
+
+    return ok;
+}
+
 bool thorlabsKinesisPlugin::isStopped()
 {
     std::lock_guard<std::mutex> lock(m_deviceMapMutex);
@@ -1938,7 +2294,7 @@ void thorlabsKinesisPlugin::initGUI()
 void thorlabsKinesisPlugin::slot_refresh()
 {
     qDebug() << className << "::slot_refresh";
-    if (m_motionThread)
+    if (m_motionThread || !m_axisMotionThreads.isEmpty())
         return;
     detect();
     if (isDetected()) initialize();
@@ -1960,7 +2316,7 @@ void thorlabsKinesisPlugin::slot_goHome()
     qDebug() << qPrintable(className + "::" + methodName)
         << "- id" << id << "baseSerial" << ax.baseSerial;
 
-    startMotionTask("Homing", [this, ax]() {
+    startAxisMotionTask(id, "Homing", [this, ax]() {
         if (m_stopRequested.load())
             return false;
         if (!disableAllTriggers())
@@ -1977,7 +2333,7 @@ void thorlabsKinesisPlugin::slot_goHome()
 
         KVSStage* stage = kvsForSerial(ax.baseSerial);
         return stage->isOpen() && stage->home(&err);
-    });
+    }, true);
 }
 
 void thorlabsKinesisPlugin::slot_moveStepForward()
@@ -1991,7 +2347,8 @@ void thorlabsKinesisPlugin::slot_moveStepForward()
     }
 
     qDebug() << className << "::slot_moveStepForward id" << id << "step_um" << stepUm;
-    startMotionTask("Relative Motion", [this, id, stepUm]() { return moveStepsAxisIndex(stepUm, id); });
+    startAxisMotionTask(id, "Relative Motion",
+        [this, id, stepUm]() { return moveStepsAxisIndex(stepUm, id, false); });
 }
 
 void thorlabsKinesisPlugin::slot_moveStepBackward()
@@ -2005,7 +2362,8 @@ void thorlabsKinesisPlugin::slot_moveStepBackward()
     }
 
     qDebug() << className << "::slot_moveStepBackward id" << id << "step_um" << stepUm;
-    startMotionTask("Relative Motion", [this, id, stepUm]() { return moveStepsAxisIndex(-stepUm, id); });
+    startAxisMotionTask(id, "Relative Motion",
+        [this, id, stepUm]() { return moveStepsAxisIndex(-stepUm, id, false); });
 }
 
 void thorlabsKinesisPlugin::slot_stopMotor()
@@ -2032,7 +2390,8 @@ void thorlabsKinesisPlugin::slot_moveTo()
     }
 
     qDebug() << className << "::slot_moveTo id" << id << "pos_um" << posUm;
-    startMotionTask("Absolute Motion", [this, id, posUm]() { return moveToAxisIndex(posUm, id); });
+    startAxisMotionTask(id, "Absolute Motion",
+        [this, id, posUm]() { return moveToAxisIndex(posUm, id, false); });
 }
 
 void thorlabsKinesisPlugin::slot_getPosition()
@@ -2050,7 +2409,7 @@ void thorlabsKinesisPlugin::slot_getPosition()
     if (!readAxisPositionUm(id, pUm))
         return;
 
-    const QString text = QString::number(pUm, 'f', 3) + " um";
+    const QString text = mmDisplayWithUnitFromUm(pUm);
     ui.label_positionValue->setText(text);
     if (id < m_axisUi.size() && m_axisUi[id].positionValue)
         m_axisUi[id].positionValue->setText(text);
@@ -2096,53 +2455,29 @@ void thorlabsKinesisPlugin::slot_applyTrigger()
 
     qDebug() << className << "::slot_applyTrigger id" << id << "serial" << ax.baseSerial;
 
-    if (!ax.isM30xy)
-    {
-        QMessageBox::warning(dock, "Thorlabs", "Laser triggers are only output by the M30XY stage.");
-        return;
-    }
-
     double startUm = 0.0;
     double intervalUm = 0.0;
     int32_t count = 0;
     int32_t width = 0;
+    const int32_t minimumPulseWidthUs = ax.isM30xy ? 1 : 1000;
+    const int32_t maximumPulseWidthUs = ax.isM30xy ? 1000000 : 32767000;
     if (!parseFiniteDouble(ui.lineEdit_trigStart->text(), startUm)
         || !parseFiniteDouble(ui.lineEdit_trigInterval->text(), intervalUm)
         || intervalUm <= 0.0
         || !parseI32(ui.lineEdit_trigCount->text(), count)
         || count <= 0
         || !parseI32(ui.lineEdit_trigWidth->text(), width)
-        || width < 1
-        || width > 1000000)
+        || width < minimumPulseWidthUs
+        || width > maximumPulseWidthUs)
     {
         QMessageBox::warning(dock, "Thorlabs",
-            "Invalid trigger parameters. Interval and count must be positive; pulse width must be between 1 and 1000000 us.");
+            QString("Invalid trigger parameters. Spacing and count must be positive; pulse width must be between %1 and %2 us.")
+                .arg(minimumPulseWidthUs)
+                .arg(maximumPulseWidthUs));
         return;
     }
 
     short err = 0;
-
-    auto* st = m30xyForBase(ax.baseSerial);
-    if (!st->isOpen())
-    {
-        QMessageBox::warning(dock, "Thorlabs", "The selected M30XY stage is not open.");
-        return;
-    }
-
-    const int32_t startDev = st->umToDevice(startUm, static_cast<unsigned>(ax.channel), &err);
-    if (err != 0)
-    {
-        QMessageBox::warning(dock, "Thorlabs", QString("Trigger start conversion failed, err=%1").arg(err));
-        return;
-    }
-
-    const int32_t intervalDev = st->umToDevice(intervalUm, static_cast<unsigned>(ax.channel), &err);
-    if (err != 0 || intervalDev <= 0)
-    {
-        QMessageBox::warning(dock, "Thorlabs", QString("Trigger interval conversion failed, err=%1").arg(err));
-        return;
-    }
-
     double triggerVelocityMmS = 0.0;
     if (id >= 0 && id < m_axisUi.size() && m_axisUi[id].triggerVelocityEdit)
     {
@@ -2155,7 +2490,9 @@ void thorlabsKinesisPlugin::slot_applyTrigger()
     }
     else
     {
-        triggerVelocityMmS = st->getMaxVelocityMmS(static_cast<unsigned>(ax.channel), &err);
+        triggerVelocityMmS = ax.isM30xy
+            ? m30xyForBase(ax.baseSerial)->getMaxVelocityMmS(static_cast<unsigned>(ax.channel), &err)
+            : kvsForSerial(ax.baseSerial)->getMaxVelocityMmS(&err);
         if (err != 0 || !std::isfinite(triggerVelocityMmS) || triggerVelocityMmS <= 0.0)
         {
             QMessageBox::warning(dock, "Thorlabs", QString("Velocity read failed, err=%1").arg(err));
@@ -2163,17 +2500,18 @@ void thorlabsKinesisPlugin::slot_applyTrigger()
         }
     }
 
-    const double triggerFrequencyHz = triggerVelocityMmS / (intervalUm / 1000.0);
+    const double intervalMm = intervalUm / 1000.0;
+    const double triggerFrequencyHz = triggerVelocityMmS / intervalMm;
     if (!std::isfinite(triggerFrequencyHz)
         || triggerFrequencyHz > kMaximumLaserTriggerFrequencyHz + 1e-9)
     {
-        const double minimumSpacingUm = triggerVelocityMmS * 1000.0 / kMaximumLaserTriggerFrequencyHz;
-        const double maximumVelocityMmS = kMaximumLaserTriggerFrequencyHz * intervalUm / 1000.0;
+        const double minimumSpacingMm = triggerVelocityMmS / kMaximumLaserTriggerFrequencyHz;
+        const double maximumVelocityMmS = kMaximumLaserTriggerFrequencyHz * intervalMm;
         QMessageBox::warning(dock, "Thorlabs",
             QString("The trigger velocity would generate %1 Hz; the maximum allowed is 20 Hz.\n\n"
-                    "Increase spacing to at least %2 um or reduce velocity to at most %3 mm/s.")
+                    "Increase spacing to at least %2 mm or reduce velocity to at most %3 mm/s.")
                 .arg(triggerFrequencyHz, 0, 'f', 3)
-                .arg(minimumSpacingUm, 0, 'f', 3)
+                .arg(minimumSpacingMm, 0, 'f', 3)
                 .arg(maximumVelocityMmS, 0, 'f', 3));
         return;
     }
@@ -2186,18 +2524,89 @@ void thorlabsKinesisPlugin::slot_applyTrigger()
         return;
     }
 
-    if (!st->setMaxVelocityMmS(static_cast<unsigned>(ax.channel), triggerVelocityMmS, &err))
+    if (ax.isM30xy)
+    {
+        BDCStage* st = m30xyForBase(ax.baseSerial);
+        if (!st->isOpen())
+        {
+            QMessageBox::warning(dock, "Thorlabs", "The selected M30XY stage is not open.");
+            return;
+        }
+
+        const int32_t startDev = st->umToDevice(startUm, static_cast<unsigned>(ax.channel), &err);
+        if (err != 0)
+        {
+            QMessageBox::warning(dock, "Thorlabs", QString("Trigger start conversion failed, err=%1").arg(err));
+            return;
+        }
+
+        const int32_t intervalDev = st->umToDevice(intervalUm, static_cast<unsigned>(ax.channel), &err);
+        if (err != 0 || intervalDev <= 0)
+        {
+            QMessageBox::warning(dock, "Thorlabs", QString("Trigger interval conversion failed, err=%1").arg(err));
+            return;
+        }
+
+        if (!st->setMaxVelocityMmS(static_cast<unsigned>(ax.channel), triggerVelocityMmS, &err))
+        {
+            QMessageBox::warning(dock, "Thorlabs", QString("Velocity setup failed, err=%1").arg(err));
+            return;
+        }
+
+        BDCTriggerConfig cfg;
+        cfg.enabled = true;
+        cfg.trigger1Mode = static_cast<int>(BDCTriggerMode::PositionStepBoth);
+        cfg.trigger1Polarity = static_cast<int>(BDCTriggerPolarity::High);
+        cfg.trigger2Mode = static_cast<int>(BDCTriggerMode::Disabled);
+        cfg.trigger2Polarity = static_cast<int>(BDCTriggerPolarity::High);
+        cfg.startPosFwd = startDev;
+        cfg.intervalFwd = intervalDev;
+        cfg.pulseCountFwd = count;
+        cfg.startPosRev = startDev;
+        cfg.intervalRev = intervalDev;
+        cfg.pulseCountRev = count;
+        cfg.pulseWidthUs = width;
+        cfg.cycleCount = 1;
+
+        st->setTriggerConfig(cfg);
+        if (!st->applyTriggerConfig(static_cast<unsigned>(ax.channel), &err))
+            QMessageBox::warning(dock, "Thorlabs", QString("Apply trigger failed, err=%1").arg(err));
+        return;
+    }
+
+    KVSStage* st = kvsForSerial(ax.baseSerial);
+    if (!st->isOpen())
+    {
+        QMessageBox::warning(dock, "Thorlabs", "The selected KVS stage is not open.");
+        return;
+    }
+
+    const int32_t startDev = st->umToDevice(startUm, &err);
+    if (err != 0)
+    {
+        QMessageBox::warning(dock, "Thorlabs", QString("Trigger start conversion failed, err=%1").arg(err));
+        return;
+    }
+
+    const int32_t intervalDev = st->umToDevice(intervalUm, &err);
+    if (err != 0 || intervalDev <= 0)
+    {
+        QMessageBox::warning(dock, "Thorlabs", QString("Trigger interval conversion failed, err=%1").arg(err));
+        return;
+    }
+
+    if (!st->setMaxVelocityMmS(triggerVelocityMmS, &err))
     {
         QMessageBox::warning(dock, "Thorlabs", QString("Velocity setup failed, err=%1").arg(err));
         return;
     }
 
-    BDCTriggerConfig cfg;
+    KVSTriggerConfig cfg;
     cfg.enabled = true;
-    cfg.trigger1Mode = static_cast<int>(BDCTriggerMode::PositionStepBoth);
-    cfg.trigger1Polarity = static_cast<int>(BDCTriggerPolarity::High);
-    cfg.trigger2Mode = static_cast<int>(BDCTriggerMode::Disabled);
-    cfg.trigger2Polarity = static_cast<int>(BDCTriggerPolarity::High);
+    cfg.trigger1Mode = static_cast<int>(KVSTriggerMode::PositionSteps);
+    cfg.trigger1Polarity = static_cast<int>(KVSTriggerPolarity::High);
+    cfg.trigger2Mode = static_cast<int>(KVSTriggerMode::Disabled);
+    cfg.trigger2Polarity = static_cast<int>(KVSTriggerPolarity::High);
     cfg.startPosFwd = startDev;
     cfg.intervalFwd = intervalDev;
     cfg.pulseCountFwd = count;
@@ -2208,7 +2617,7 @@ void thorlabsKinesisPlugin::slot_applyTrigger()
     cfg.cycleCount = 1;
 
     st->setTriggerConfig(cfg);
-    if (!st->applyTriggerConfig(static_cast<unsigned>(ax.channel), &err))
+    if (!st->applyTriggerConfig(&err))
         QMessageBox::warning(dock, "Thorlabs", QString("Apply trigger failed, err=%1").arg(err));
 }
 

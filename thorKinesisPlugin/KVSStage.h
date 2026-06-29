@@ -2,6 +2,18 @@
 #include <string>
 #include <cstdint>
 
+enum class KVSTriggerMode : int
+{
+    Disabled = 0x00,
+    PositionSteps = 0x0D
+};
+
+enum class KVSTriggerPolarity : int
+{
+    High = 0x01,
+    Low = 0x02
+};
+
 struct KVSTriggerConfig
 {
     bool enabled = false;
@@ -43,6 +55,7 @@ public:
 
     int32_t getPosition(short* errOut = nullptr) const;
     bool isMoving(short* errOut = nullptr) const;
+    bool isHomed(short* errOut = nullptr) const;
 
     // Motion - public standard unit: micrometers (µm)
     bool moveToUm(double posUm, short* errOut = nullptr);
@@ -52,6 +65,8 @@ public:
     // Unit conversion helpers
     double umPerDeviceUnit() const { return factor_um; }
     double mmPerDeviceUnit() const { return factor_position_mm; }
+    double getMaxVelocityMmS(short* errOut = nullptr) const;
+    bool setMaxVelocityMmS(double maxVelocityMmS, short* errOut = nullptr);
 
     double deviceToUm(int32_t deviceUnits) const;
     double deviceToMm(int32_t deviceUnits) const;

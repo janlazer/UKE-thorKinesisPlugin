@@ -61,6 +61,7 @@ public:
 
     int32_t getPosition(unsigned channel, short* errOut = nullptr) const;
     bool isMoving(unsigned channel, short* errOut = nullptr) const;
+    bool isHomed(unsigned channel, short* errOut = nullptr) const;
 
     // Motion - public standard unit: micrometers (µm)
     bool moveToUm(double posUm, unsigned channel, short* errOut = nullptr);

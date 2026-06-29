@@ -1020,6 +1020,16 @@ bool BDCStage::isMoving(unsigned channel, short* errOut) const
     return (bits & 0x00000030u) != 0;
 }
 
+bool BDCStage::isHomed(unsigned channel, short* errOut) const
+{
+    if (!validateReady(channel, errOut))
+        return false;
+
+    const uint32_t bits = static_cast<uint32_t>(BDC_GetStatusBits(m_serialCStr, static_cast<short>(channel)));
+    if (errOut) *errOut = 0;
+    return (bits & 0x00000400u) != 0;
+}
+
 double BDCStage::getPositionUm(unsigned channel, short* errOut) const
 {
     short err = 0;

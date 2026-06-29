@@ -878,6 +878,16 @@ bool KVSStage::isMoving(short* errOut) const
     return (bits & 0x00000030u) != 0;
 }
 
+bool KVSStage::isHomed(short* errOut) const
+{
+    if (!validateOpen(errOut))
+        return false;
+
+    const uint32_t bits = static_cast<uint32_t>(KVS_GetStatusBits(m_serialCStr));
+    if (errOut) *errOut = 0;
+    return (bits & 0x00000400u) != 0;
+}
+
 double KVSStage::getPositionUm(short* errOut) const
 {
     short err = 0;
@@ -902,6 +912,85 @@ double KVSStage::deviceToMm(int32_t deviceUnits) const
 double KVSStage::deviceToUm(int32_t deviceUnits) const
 {
     return static_cast<double>(deviceUnits) * factor_um;
+}
+
+double KVSStage::getMaxVelocityMmS(short* errOut) const
+{
+    if (!validateOpen(errOut))
+        return 0.0;
+
+    int acceleration = 0;
+    int maxVelocity = 0;
+    const short err = KVS_GetVelParams(m_serialCStr, &acceleration, &maxVelocity);
+    if (!okOrLog("KVS_GetVelParams", m_serial, err, errOut))
+        return 0.0;
+
+    const double velocityMmS = static_cast<double>(maxVelocity) * factor_velocity_mm;
+    if (!std::isfinite(velocityMmS) || velocityMmS <= 0.0)
+    {
+        if (errOut) *errOut = kErrInvalidState;
+        return 0.0;
+    }
+
+    if (errOut) *errOut = 0;
+    return velocityMmS;
+}
+
+bool KVSStage::setMaxVelocityMmS(double maxVelocityMmS, short* errOut)
+{
+    if (!validateOpen(errOut))
+        return false;
+
+    if (!std::isfinite(maxVelocityMmS)
+        || maxVelocityMmS <= 0.0
+        || maxVelocityMmS > kKvs30MotorMaxVelocityMmS + 1e-9
+        || !std::isfinite(factor_velocity_mm)
+        || factor_velocity_mm <= 0.0)
+    {
+        qDebug() << "KVSStage::setMaxVelocityMmS invalid velocity serial=" << m_serialCStr
+            << "velocityMmS=" << maxVelocityMmS
+            << "maxAllowedMmS=" << kKvs30MotorMaxVelocityMmS
+            << "factor=" << factor_velocity_mm;
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    int acceleration = 0;
+    int previousMaxVelocity = 0;
+    short err = KVS_GetVelParams(m_serialCStr, &acceleration, &previousMaxVelocity);
+    if (!okOrLog("KVS_GetVelParams", m_serial, err, errOut))
+        return false;
+
+    const double velocityDeviceValue = maxVelocityMmS / factor_velocity_mm;
+    if (!std::isfinite(velocityDeviceValue)
+        || velocityDeviceValue <= 0.0
+        || velocityDeviceValue > static_cast<double>((std::numeric_limits<int>::max)()))
+    {
+        qDebug() << "KVSStage::setMaxVelocityMmS invalid device velocity serial=" << m_serialCStr
+            << "velocityMmS=" << maxVelocityMmS
+            << "deviceValue=" << velocityDeviceValue;
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    const int maxVelocityDevice = static_cast<int>(std::lround(velocityDeviceValue));
+    if (maxVelocityDevice <= 0)
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    err = KVS_SetVelParams(m_serialCStr, acceleration, maxVelocityDevice);
+    if (!okOrLog("KVS_SetVelParams", m_serial, err, errOut))
+        return false;
+
+    qDebug() << "KVSStage::setMaxVelocityMmS serial=" << m_serialCStr
+        << "velocityMmS=" << maxVelocityMmS
+        << "accelerationDevice=" << acceleration
+        << "maxVelocityDevice=" << maxVelocityDevice;
+
+    if (errOut) *errOut = 0;
+    return true;
 }
 
 int32_t KVSStage::mmToDevice(double mm, short* errOut) const

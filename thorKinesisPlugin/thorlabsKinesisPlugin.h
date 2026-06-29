@@ -146,6 +146,7 @@ private:
     {
         QFrame* frame = nullptr;
         QLabel* title = nullptr;
+        QLabel* statusLabel = nullptr;
         QLabel* serial = nullptr;
         QLabel* positionValue = nullptr;
         QLineEdit* positionEdit = nullptr;
@@ -155,8 +156,10 @@ private:
         QLineEdit* triggerCountEdit = nullptr;
         QLineEdit* triggerWidthEdit = nullptr;
         QLineEdit* triggerVelocityEdit = nullptr;
+        QLabel* triggerFrequencyValue = nullptr;
         QPushButton* homeButton = nullptr;
         QPushButton* moveButton = nullptr;
+        QPushButton* stopButton = nullptr;
         QPushButton* stepDownButton = nullptr;
         QPushButton* stepUpButton = nullptr;
         QPushButton* applyTriggerButton = nullptr;
@@ -176,12 +179,19 @@ private:
     void clearAxisFrames();
     void selectAxis(int id);
     void refreshAxisPositionUi(int id);
+    void refreshAxisStatusUi(int id);
     void refreshAllAxisPositionsUi();
     void syncLegacyMotionInputsFromAxisUi(int id);
     void syncLegacyTriggerInputsFromAxisUi(int id);
+    void updateTriggerFrequencyUi(int id);
     void setMotionUiBusy(bool busy);
+    void setAxisControlsBusy(int id, bool busy);
+    bool isAxisUiBusy(int id) const;
     void startMotionTask(const QString& operation, std::function<bool()> task);
+    void startAxisMotionTask(int axisIndex, const QString& operation,
+        std::function<bool()> task, bool referencing = false);
     void waitForMotionToFinish();
+    bool waitUntilAllAxesStopped(int timeoutMs = 120000);
     void closeDevices();
     bool disableAllTriggers(bool force = false);
     bool chooseAxesForInitialization();
@@ -193,8 +203,8 @@ private:
     int axisIndexFromPublicId(int id) const;
     bool resolveAxisRequest(const char* axes, QVector<int>& axisIndices) const;
     bool axisTravelLimitsUm(const AxisEntry& axis, double& minUm, double& maxUm) const;
-    bool moveToAxisIndex(double posUm, int axisIndex);
-    bool moveStepsAxisIndex(double stepsUm, int axisIndex);
+    bool moveToAxisIndex(double posUm, int axisIndex, bool waitForOtherAxes = true);
+    bool moveStepsAxisIndex(double stepsUm, int axisIndex, bool waitForOtherAxes = true);
     bool moveAxesCoordinated(const double* values, const char* axes, bool relative);
     bool moveAxesByGlobalIds(const double* values, const int* globalAxisIds, int axisCount, bool relative);
     bool moveToAxisCodes(const double* positions, const int* axes, std::size_t count);
@@ -208,6 +218,8 @@ private:
 
     bool axisMatches(const AxisEntry& ax, QChar axisName) const;
     bool readAxisPositionUm(int id, double& valueUm) const;
+    bool readAxisMotionState(int id, bool& moving, bool& homed) const;
+    bool stopAxisIndex(int id);
     int findAxisIndexByName(QChar axisName) const;
 
 private:
@@ -222,6 +234,9 @@ private:
     QVector<AxisEntry> m_detectedAxes;
     QVector<AxisEntry> m_axes;
     QVector<AxisUi> m_axisUi;
+    QMap<int, QThread*> m_axisMotionThreads;
+    QSet<int> m_busyAxisIndices;
+    QSet<int> m_referencingAxisIndices;
     QSet<QString> m_selectedAxisKeys;
     QVector<PositionConfig> m_positionConfigs;
     int m_activePositionConfigIndex = -1;
