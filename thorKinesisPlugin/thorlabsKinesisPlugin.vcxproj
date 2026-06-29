@@ -143,7 +143,6 @@
     <ClInclude Include="BDCStage.h" />
     <ClInclude Include="KVSStage.h" />
     <ClInclude Include="KinesisDetect.h" />
-    <ClInclude Include="ScanTypes.h" />
     <ClInclude Include="ScanValidation.h" />
     <ClInclude Include="ThorlabsPositionManagerDialog.h" />
     <ClInclude Include="thorlabsKinesisPlugin_global.h" />

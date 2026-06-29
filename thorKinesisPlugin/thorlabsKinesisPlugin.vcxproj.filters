@@ -67,9 +67,6 @@
     <ClInclude Include="KinesisDetect.h">
       <Filter>Header Dateien</Filter>
     </ClInclude>
-    <ClInclude Include="ScanTypes.h">
-      <Filter>Header Dateien</Filter>
-    </ClInclude>
     <ClInclude Include="ScanValidation.h">
       <Filter>Header Dateien</Filter>
     </ClInclude>

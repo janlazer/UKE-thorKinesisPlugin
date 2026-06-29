@@ -40,7 +40,9 @@
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <DisableSpecificWarnings>4458;4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <LanguageStandard>stdcpp14</LanguageStandard>
+      <AdditionalIncludeDirectories>C:\Programming\Qt\5.15.2\msvc2019_64\include;C:\Programming\Qt\5.15.2\msvc2019_64\include\QtCore;C:\Programming\Qt\5.15.2\msvc2019_64\include\QtGui;C:\Programming\Qt\5.15.2\msvc2019_64\include\QtWidgets;C:\Programming\qwt-6.1.4\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -51,7 +53,9 @@
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <DisableSpecificWarnings>4458;4996;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <LanguageStandard>stdcpp14</LanguageStandard>
+      <AdditionalIncludeDirectories>C:\Programming\Qt\5.15.2\msvc2019_64\include;C:\Programming\Qt\5.15.2\msvc2019_64\include\QtCore;C:\Programming\Qt\5.15.2\msvc2019_64\include\QtGui;C:\Programming\Qt\5.15.2\msvc2019_64\include\QtWidgets;C:\Programming\qwt-6.1.4\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>_CONSOLE;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -67,7 +71,6 @@
     <ClCompile Include="ScanValidationTests.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\ScanTypes.h" />
     <ClInclude Include="..\ScanValidation.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

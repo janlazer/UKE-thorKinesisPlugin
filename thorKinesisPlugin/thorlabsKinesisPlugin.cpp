@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "thorlabsKinesisPlugin.h"
+#include "ScanValidation.h"
 #include "ThorlabsPositionManagerDialog.h"
 
 #include <QCheckBox>

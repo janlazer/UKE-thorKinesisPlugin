@@ -42,10 +42,86 @@
 #include <QMdiSubWindow>
 #include <QMap>
 #include <cstddef>
+#include <cstdint>
+#include <vector>
 #include "qwt_plot_curve.h"
-#include "ScanValidation.h"
-
 class QDockWidget;
+
+//! Scan job value types
+/*! Shared data structures for stage scan jobs. They live in interfaces.h so all
+    hardware interfaces can reference scan jobs without an additional copied header.
+*/
+struct ScanPoint
+{
+    double xUm = 0.0;
+    double yUm = 0.0;
+};
+
+struct LaserLine
+{
+    ScanPoint start;
+    ScanPoint end;
+};
+
+struct ScanLayer
+{
+    double zUm = 0.0;
+    std::vector<LaserLine> lines;
+};
+
+struct ScanJob
+{
+    std::vector<ScanLayer> layers;
+
+    double velocityMmS = 0.0;
+    double focusDiameterUm = 0.0;
+    double triggerSpacingUm = 0.0;
+    int32_t pulseWidthUs = 0;
+};
+
+struct ScanCapabilities
+{
+    bool supportsScanJobs = false;
+    bool supportsHardwarePositionTrigger = false;
+    bool supportsHorizontalLines = false;
+    bool supportsVerticalLines = false;
+    bool supportsDiagonalLines = false;
+    bool supportsLayeredZ = false;
+    bool controlsScanVelocity = false;
+
+    double maximumTriggerFrequencyHz = 0.0;
+};
+
+//! Scan validation value types
+/*! Lightweight validation state shared by scan-capable stage interfaces and callers. */
+enum class ScanValidationError
+{
+    None,
+    EmptyJob,
+    InvalidVelocity,
+    InvalidFocusDiameter,
+    InvalidTriggerSpacing,
+    InvalidPulseWidth,
+    InvalidMaximumTriggerFrequency,
+    TriggerFrequencyExceeded,
+    PulseWidthExceedsTriggerPeriod,
+    EmptyLayer,
+    InvalidCoordinate,
+    ZeroLengthLine,
+    PulseCountOverflow,
+    MissingScanAxis,
+    UnsupportedScanGeometry,
+    UnsupportedScanVelocity
+};
+
+struct ScanValidationResult
+{
+    ScanValidationError error = ScanValidationError::None;
+    std::size_t layerIndex = 0;
+    std::size_t lineIndex = 0;
+
+    bool isValid() const { return error == ScanValidationError::None; }
+};
 
 //! IOutput
 /*! Base class of the Output windows
