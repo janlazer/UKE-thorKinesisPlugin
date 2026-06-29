@@ -71,6 +71,7 @@ public:
     double umPerDeviceUnit(unsigned channel) const;
     double mmPerDeviceUnit(unsigned channel) const;
     double getMaxVelocityMmS(unsigned channel, short* errOut = nullptr) const;
+    bool setMaxVelocityMmS(unsigned channel, double maxVelocityMmS, short* errOut = nullptr);
 
     double deviceToUm(int32_t deviceUnits, unsigned channel) const;
     double deviceToMm(int32_t deviceUnits, unsigned channel) const;

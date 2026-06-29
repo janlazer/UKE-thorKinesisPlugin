@@ -1081,6 +1081,70 @@ double BDCStage::getMaxVelocityMmS(unsigned channel, short* errOut) const
     return velocityMmS;
 }
 
+bool BDCStage::setMaxVelocityMmS(unsigned channel, double maxVelocityMmS, short* errOut)
+{
+    if (!validateReady(channel, errOut))
+        return false;
+
+    const int idx = channelIndex(channel);
+    const double velocityFactor = factor_velocity_mm[idx];
+    if (!std::isfinite(maxVelocityMmS)
+        || maxVelocityMmS <= 0.0
+        || maxVelocityMmS > kBdcM30MotorMaxVelocityMmS + 1e-9
+        || !std::isfinite(velocityFactor)
+        || velocityFactor <= 0.0)
+    {
+        qDebug() << "BDCStage::setMaxVelocityMmS invalid velocity serial=" << m_serialCStr
+            << "ch=" << channel
+            << "velocityMmS=" << maxVelocityMmS
+            << "maxAllowedMmS=" << kBdcM30MotorMaxVelocityMmS
+            << "factor=" << velocityFactor;
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    int acceleration = 0;
+    int previousMaxVelocity = 0;
+    short err = BDC_GetVelParams(
+        m_serialCStr, static_cast<short>(channel), &acceleration, &previousMaxVelocity);
+    if (!okOrLog("BDC_GetVelParams", m_serial, err, channel, errOut))
+        return false;
+
+    const double velocityDeviceValue = maxVelocityMmS / velocityFactor;
+    if (!std::isfinite(velocityDeviceValue)
+        || velocityDeviceValue <= 0.0
+        || velocityDeviceValue > static_cast<double>((std::numeric_limits<int>::max)()))
+    {
+        qDebug() << "BDCStage::setMaxVelocityMmS invalid device velocity serial=" << m_serialCStr
+            << "ch=" << channel
+            << "velocityMmS=" << maxVelocityMmS
+            << "deviceValue=" << velocityDeviceValue;
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    const int maxVelocityDevice = static_cast<int>(std::lround(velocityDeviceValue));
+    if (maxVelocityDevice <= 0)
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    err = BDC_SetVelParams(
+        m_serialCStr, static_cast<short>(channel), acceleration, maxVelocityDevice);
+    if (!okOrLog("BDC_SetVelParams", m_serial, err, channel, errOut))
+        return false;
+
+    qDebug() << "BDCStage::setMaxVelocityMmS serial=" << m_serialCStr
+        << "ch=" << channel
+        << "velocityMmS=" << maxVelocityMmS
+        << "accelerationDevice=" << acceleration
+        << "maxVelocityDevice=" << maxVelocityDevice;
+
+    if (errOut) *errOut = 0;
+    return true;
+}
+
 double BDCStage::deviceToMm(int32_t deviceUnits, unsigned channel) const
 {
     const int idx = channelIndex(channel);

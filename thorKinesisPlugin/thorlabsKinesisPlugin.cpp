@@ -718,10 +718,24 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
 
         if (ax.isM30xy)
         {
+            QString velocityText = QStringLiteral("2.000");
+            if (BDCStage* stage = m30xyForBase(ax.baseSerial))
+            {
+                if (stage->isOpen())
+                {
+                    short err = 0;
+                    const double velocityMmS = stage->getMaxVelocityMmS(
+                        static_cast<unsigned>(ax.channel), &err);
+                    if (err == 0 && std::isfinite(velocityMmS) && velocityMmS > 0.0)
+                        velocityText = QString::number(velocityMmS, 'f', 3);
+                }
+            }
+
             axisUi.triggerStartEdit = new QLineEdit("0", frame);
             axisUi.triggerIntervalEdit = new QLineEdit("0", frame);
             axisUi.triggerCountEdit = new QLineEdit("1", frame);
             axisUi.triggerWidthEdit = new QLineEdit("50000", frame);
+            axisUi.triggerVelocityEdit = new QLineEdit(velocityText, frame);
             axisUi.applyTriggerButton = new QPushButton("Apply Trigger", frame);
             axisUi.disableTriggerButton = new QPushButton("Disable Trigger", frame);
 
@@ -735,8 +749,11 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
             grid->addWidget(new QLabel("Pulse width [us]:", frame), 5, 2);
             grid->addWidget(axisUi.triggerWidthEdit, 5, 3);
 
-            grid->addWidget(axisUi.applyTriggerButton, 6, 0, 1, 2);
-            grid->addWidget(axisUi.disableTriggerButton, 6, 2, 1, 2);
+            grid->addWidget(new QLabel("Velocity [mm/s]:", frame), 6, 0);
+            grid->addWidget(axisUi.triggerVelocityEdit, 6, 1);
+
+            grid->addWidget(axisUi.applyTriggerButton, 7, 0, 1, 2);
+            grid->addWidget(axisUi.disableTriggerButton, 7, 2, 1, 2);
         }
 
         frameLayout->addLayout(grid);
@@ -1138,7 +1155,7 @@ ScanCapabilities thorlabsKinesisPlugin::getScanCapabilities() const
     capabilities.supportsVerticalLines = true;
     capabilities.supportsDiagonalLines = false;
     capabilities.supportsLayeredZ = findAxisIndexByName(QChar('z')) >= 0;
-    capabilities.controlsScanVelocity = false;
+    capabilities.controlsScanVelocity = true;
     capabilities.maximumTriggerFrequencyHz = kMaximumLaserTriggerFrequencyHz;
     return capabilities;
 }
@@ -1195,11 +1212,10 @@ bool thorlabsKinesisPlugin::configureLineTrigger(BDCStage* stage, unsigned chann
     if (pulseCount <= 0)
         return false;
 
-    const double currentVelocityMmS = stage->getMaxVelocityMmS(channel, &err);
-    if (err != 0 || !std::isfinite(currentVelocityMmS) || currentVelocityMmS <= 0.0)
+    if (!stage->setMaxVelocityMmS(channel, job.velocityMmS, &err))
         return false;
 
-    const double triggerFrequencyHz = currentVelocityMmS / (job.triggerSpacingUm / 1000.0);
+    const double triggerFrequencyHz = job.velocityMmS / (job.triggerSpacingUm / 1000.0);
     if (!std::isfinite(triggerFrequencyHz)
         || triggerFrequencyHz > kMaximumLaserTriggerFrequencyHz + 1e-9)
         return false;
@@ -2127,20 +2143,38 @@ void thorlabsKinesisPlugin::slot_applyTrigger()
         return;
     }
 
-    const double maxVelocityMmS = st->getMaxVelocityMmS(static_cast<unsigned>(ax.channel), &err);
-    if (err != 0)
+    double triggerVelocityMmS = 0.0;
+    if (id >= 0 && id < m_axisUi.size() && m_axisUi[id].triggerVelocityEdit)
     {
-        QMessageBox::warning(dock, "Thorlabs", QString("Velocity read failed, err=%1").arg(err));
-        return;
+        if (!parseFiniteDouble(m_axisUi[id].triggerVelocityEdit->text(), triggerVelocityMmS)
+            || triggerVelocityMmS <= 0.0)
+        {
+            QMessageBox::warning(dock, "Thorlabs", "Please enter a positive, valid trigger velocity.");
+            return;
+        }
+    }
+    else
+    {
+        triggerVelocityMmS = st->getMaxVelocityMmS(static_cast<unsigned>(ax.channel), &err);
+        if (err != 0 || !std::isfinite(triggerVelocityMmS) || triggerVelocityMmS <= 0.0)
+        {
+            QMessageBox::warning(dock, "Thorlabs", QString("Velocity read failed, err=%1").arg(err));
+            return;
+        }
     }
 
-    const double triggerFrequencyHz = maxVelocityMmS / (intervalUm / 1000.0);
+    const double triggerFrequencyHz = triggerVelocityMmS / (intervalUm / 1000.0);
     if (!std::isfinite(triggerFrequencyHz)
         || triggerFrequencyHz > kMaximumLaserTriggerFrequencyHz + 1e-9)
     {
+        const double minimumSpacingUm = triggerVelocityMmS * 1000.0 / kMaximumLaserTriggerFrequencyHz;
+        const double maximumVelocityMmS = kMaximumLaserTriggerFrequencyHz * intervalUm / 1000.0;
         QMessageBox::warning(dock, "Thorlabs",
-            QString("The current velocity would generate %1 Hz; the maximum allowed is 20 Hz.")
-                .arg(triggerFrequencyHz, 0, 'f', 3));
+            QString("The trigger velocity would generate %1 Hz; the maximum allowed is 20 Hz.\n\n"
+                    "Increase spacing to at least %2 um or reduce velocity to at most %3 mm/s.")
+                .arg(triggerFrequencyHz, 0, 'f', 3)
+                .arg(minimumSpacingUm, 0, 'f', 3)
+                .arg(maximumVelocityMmS, 0, 'f', 3));
         return;
     }
 
@@ -2149,6 +2183,12 @@ void thorlabsKinesisPlugin::slot_applyTrigger()
     {
         QMessageBox::warning(dock, "Thorlabs",
             "The pulse width is longer than the time between two trigger pulses.");
+        return;
+    }
+
+    if (!st->setMaxVelocityMmS(static_cast<unsigned>(ax.channel), triggerVelocityMmS, &err))
+    {
+        QMessageBox::warning(dock, "Thorlabs", QString("Velocity setup failed, err=%1").arg(err));
         return;
     }
 

@@ -154,6 +154,7 @@ private:
         QLineEdit* triggerIntervalEdit = nullptr;
         QLineEdit* triggerCountEdit = nullptr;
         QLineEdit* triggerWidthEdit = nullptr;
+        QLineEdit* triggerVelocityEdit = nullptr;
         QPushButton* homeButton = nullptr;
         QPushButton* moveButton = nullptr;
         QPushButton* stepDownButton = nullptr;
