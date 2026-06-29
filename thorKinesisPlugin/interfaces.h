@@ -581,7 +581,9 @@ public:
 		SERIALLIGHTSOURCE,
 		LIQUIDLENS,
 		FORCESENSOR,
-		NETWORKCOMMUNICATION
+		NETWORKCOMMUNICATION,
+		DAQBOARD,
+		ARDUINO
 	};
 
 	//! OutputType
@@ -921,6 +923,17 @@ public:
 	**/
 	virtual bool moveSteps(double steps, int id = 0) = 0;
 
+	/**
+	* Moves to currentPosition + step*stepSize
+	*
+	* @param step - number of steps
+	*
+	* @param stepSize - distance to move per step
+	*
+	* @returns true if succesful, false otherwise
+	*
+	**/
+	virtual bool moveSteps(double* steps, const char* axes) = 0;
 
 	/**
 	* Returns the current position
@@ -1164,13 +1177,6 @@ public:
 	**/
 	virtual double getExposureTime() = 0;
 
-	/**
-	* Returns current exposure time in us
-	*
-	* @returns current exposure time in us
-	*
-	**/
-	virtual void setExposureTime(double) = 0;
 
 
 signals:
@@ -1896,6 +1902,48 @@ public slots:
 signals:
 	void showMessage(QString msg);
 };
+//! IDAQBoard
+/*! IDAQBoard interface for camera implementations
+*/
+
+class IDAQBoard : public IHardware
+{
+	Q_OBJECT
+public:
+	/// <summary>Gets input from Job and connects Signals automatically
+	/// </summary>
+	/// <param name="portNum">is the port number on the board that will be addressed.</param>
+	/// <param name="bitNum">is the index of the bit of the port that will be set.</param>
+	/// <param name="timer">is the timer in milliseconds that will count down until the bit is set to 0 again.</param>
+	virtual void setPortfromJob(int port, int bit, int timer) = 0;
+	/// <summary>Gets input from Job and connects Signals automatically
+	/// </summary>
+	/// <param name="portNum">is the port number on the board that will be addressed.</param>
+	/// <param name="bits">are the bits of the port that will be set (e.g. bits=5 means bit0 and bit2 will be set to 1, everything else to 0).</param>
+	virtual void setBitsfromJob(int port, int bits) = 0;
+public slots:
+	//virtual void timerFinished();
+	virtual void triggerMasterSlot() = 0;
+
+};
+
+class IArduino : public IHardware
+{
+	Q_OBJECT
+public:
+	/// <summary>Gets input from Job and connects Signals automatically
+	/// </summary>
+	/// <param name="timer">is the number of the timer that will be adressed.</param>
+	/// <param name="delay">is the starting delay for the timer in microseconds.</param>
+	/// <param name="pulsewidth">is the length of the timer signal in microseconds.</param>
+	virtual void setTimerfromJob(int timer, int delay_us, int pulsewidth_us = 10) = 0;
+	/// <summary>Gets input from Job and connects Signals automatically
+	/// </summary>
+	/// <param name="pin">is the pin number on the board that will be addressed.</param>
+	/// <param name="value">is the value to set the pin: 1 = HIGH, 0 = LOW.</param>
+	virtual void setPinfromJob(int pin, int value) = 0;
+public slots:
+};
 
 #define INetworkCommunication_iid "interfaces.lzh.bo.INetworkCommunication/1.0"
 #define IForceSensor_iid "interfaces.lzh.bo.IForceSensor/1.0"
@@ -1917,6 +1965,8 @@ signals:
 #define IQwtOutput_iid "interfaces.lzh.bo.IQwtOutput/1.0"
 #define IOGlOutput_iid "interfaces.lzh.bo.IOGlOutput/1.0"
 #define IOGl2DOutput_iid "interfaces.lzh.bo.IOGl2DOutput/1.0"
+#define IDAQBoard_iid "interfaces.lzh.bo.IDAQBoard/1.0"
+#define IArduino_iid "interfaces.lzh.bo.IArduino/1.0"
 
 Q_DECLARE_INTERFACE(INetworkCommunication, INetworkCommunication_iid)
 Q_DECLARE_INTERFACE(IForceSensor, IForceSensor_iid)
@@ -1938,5 +1988,7 @@ Q_DECLARE_INTERFACE(IOutput, IOutput_iid)
 Q_DECLARE_INTERFACE(IQwtOutput, IQwtOutput_iid)
 Q_DECLARE_INTERFACE(IOGlOutput, IOGlOutput_iid)
 Q_DECLARE_INTERFACE(IOGl2DOutput, IOGl2DOutput_iid)
+Q_DECLARE_INTERFACE(IDAQBoard, IDAQBoard_iid)
+Q_DECLARE_INTERFACE(IArduino, IArduino_iid)
 
 #endif
