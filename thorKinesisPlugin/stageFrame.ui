@@ -6,12 +6,12 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>640</width>
-    <height>188</height>
+    <width>590</width>
+    <height>56</height>
    </rect>
   </property>
   <property name="sizePolicy">
-   <sizepolicy hsizetype="Expanding" vsizetype="Maximum">
+   <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
     <horstretch>0</horstretch>
     <verstretch>0</verstretch>
    </sizepolicy>
@@ -19,11 +19,20 @@
   <property name="minimumSize">
    <size>
     <width>590</width>
-    <height>0</height>
+    <height>56</height>
    </size>
   </property>
+  <property name="maximumSize">
+   <size>
+    <width>640</width>
+    <height>56</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>Frame</string>
+  </property>
   <property name="styleSheet">
-   <string notr="true">#stageFrame { background-color: rgb(185, 185, 185); border: 1px solid rgb(125, 125, 125); border-radius: 2px; }</string>
+   <string notr="true">#stageFrame { background-color: rgb(115, 115, 115); border: 1px solid rgb(70, 70, 70); border-radius: 2px; }</string>
   </property>
   <property name="frameShape">
    <enum>QFrame::StyledPanel</enum>
@@ -34,66 +43,66 @@
   <property name="lineWidth">
    <number>1</number>
   </property>
-  <layout class="QVBoxLayout" name="verticalLayout">
+  <layout class="QVBoxLayout" name="stageVerticalLayout">
+   <property name="spacing">
+    <number>2</number>
+   </property>
    <property name="leftMargin">
-    <number>4</number>
+    <number>2</number>
    </property>
    <property name="topMargin">
-    <number>4</number>
+    <number>2</number>
    </property>
    <property name="rightMargin">
-    <number>4</number>
+    <number>2</number>
    </property>
    <property name="bottomMargin">
-    <number>4</number>
-   </property>
-   <property name="spacing">
-    <number>4</number>
+    <number>2</number>
    </property>
    <item>
-    <layout class="QHBoxLayout" name="titleLayout">
+    <layout class="QGridLayout" name="stageGridLayout">
+     <property name="leftMargin">
+      <number>0</number>
+     </property>
+     <property name="topMargin">
+      <number>0</number>
+     </property>
+     <property name="rightMargin">
+      <number>0</number>
+     </property>
+     <property name="bottomMargin">
+      <number>0</number>
+     </property>
      <property name="spacing">
       <number>2</number>
      </property>
-     <item>
+     <item row="0" column="3">
       <widget class="QLabel" name="label_globalStageID">
        <property name="maximumSize">
         <size>
-         <width>32</width>
+         <width>25</width>
          <height>16777215</height>
         </size>
        </property>
        <property name="text">
-        <string>#1</string>
+        <string>1.</string>
        </property>
       </widget>
      </item>
-     <item>
+     <item row="0" column="4" colspan="3">
       <widget class="QLabel" name="label_title">
-       <property name="font">
-        <font>
-         <bold>true</bold>
-        </font>
+       <property name="minimumSize">
+        <size>
+         <width>115</width>
+         <height>0</height>
+        </size>
        </property>
        <property name="text">
         <string>Stage</string>
        </property>
       </widget>
      </item>
-     <item>
-      <spacer name="titleSpacer">
-       <property name="orientation">
-        <enum>Qt::Horizontal</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>40</width>
-         <height>20</height>
-        </size>
-       </property>
-      </spacer>
-     </item>
-     <item>
+     <item row="0" column="7">
       <widget class="QLabel" name="label_status">
        <property name="minimumSize">
         <size>
@@ -103,7 +112,7 @@
        </property>
        <property name="maximumSize">
         <size>
-         <width>110</width>
+         <width>100</width>
          <height>24</height>
         </size>
        </property>
@@ -127,51 +136,112 @@
        </property>
       </widget>
      </item>
-    </layout>
-   </item>
-   <item>
-    <layout class="QGridLayout" name="stageGridLayout">
-     <property name="leftMargin">
-      <number>0</number>
-     </property>
-     <property name="topMargin">
-      <number>0</number>
-     </property>
-     <property name="rightMargin">
-      <number>0</number>
-     </property>
-     <property name="bottomMargin">
-      <number>0</number>
-     </property>
-     <property name="horizontalSpacing">
-      <number>2</number>
-     </property>
-     <property name="verticalSpacing">
-      <number>2</number>
-     </property>
-     <item row="0" column="0">
-      <widget class="QLabel" name="label_serialCaption">
+     <item row="0" column="8">
+      <widget class="QPushButton" name="pushButton_home">
+       <property name="maximumSize">
+        <size>
+         <width>86</width>
+         <height>16777215</height>
+        </size>
+       </property>
        <property name="text">
-        <string>Serial:</string>
+        <string>Home</string>
        </property>
       </widget>
      </item>
-     <item row="0" column="1" colspan="4">
-      <widget class="QLabel" name="label_serial">
+     <item row="0" column="9" colspan="2">
+      <widget class="QToolButton" name="toolButton_triggerMenu">
+       <property name="minimumSize">
+        <size>
+         <width>82</width>
+         <height>22</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>82</width>
+         <height>24</height>
+        </size>
+       </property>
        <property name="text">
-        <string>00000000</string>
+        <string>Trigger</string>
+       </property>
+       <property name="popupMode">
+        <enum>QToolButton::InstantPopup</enum>
        </property>
       </widget>
      </item>
-     <item row="1" column="0">
-      <widget class="QLabel" name="label_targetCaption">
+     <item row="2" column="4">
+      <widget class="QPushButton" name="pushButton_stepDown">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Minimum" vsizetype="Minimum">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>28</width>
+         <height>24</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>28</width>
+         <height>24</height>
+        </size>
+       </property>
        <property name="text">
-        <string>Target [mm]:</string>
+        <string>&lt;</string>
        </property>
       </widget>
      </item>
-     <item row="1" column="1">
+     <item row="2" column="5">
+      <widget class="QLineEdit" name="lineEdit_step">
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>22</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>74</width>
+         <height>24</height>
+        </size>
+       </property>
+       <property name="text">
+        <string>0.100</string>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="6">
+      <widget class="QPushButton" name="pushButton_stepUp">
+       <property name="minimumSize">
+        <size>
+         <width>28</width>
+         <height>24</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>28</width>
+         <height>24</height>
+        </size>
+       </property>
+       <property name="text">
+        <string>&gt;</string>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="7">
       <widget class="QLineEdit" name="lineEdit_position">
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>22</height>
+        </size>
+       </property>
        <property name="maximumSize">
         <size>
          <width>82</width>
@@ -183,7 +253,7 @@
        </property>
       </widget>
      </item>
-     <item row="1" column="2">
+     <item row="2" column="8">
       <widget class="QPushButton" name="pushButton_go">
        <property name="minimumSize">
         <size>
@@ -193,23 +263,23 @@
        </property>
        <property name="maximumSize">
         <size>
-         <width>40</width>
+         <width>86</width>
          <height>24</height>
         </size>
        </property>
        <property name="styleSheet">
-        <string notr="true">background-color: green;</string>
+        <string notr="true">background-color: green; color: black;</string>
        </property>
        <property name="text">
         <string>Go</string>
        </property>
       </widget>
      </item>
-     <item row="1" column="3">
+     <item row="2" column="9">
       <widget class="QPushButton" name="pushButton_stop">
        <property name="minimumSize">
         <size>
-         <width>42</width>
+         <width>82</width>
          <height>24</height>
         </size>
        </property>
@@ -227,115 +297,12 @@
        </property>
       </widget>
      </item>
-     <item row="1" column="4">
-      <widget class="QPushButton" name="pushButton_home">
-       <property name="minimumSize">
-        <size>
-         <width>48</width>
-         <height>24</height>
-        </size>
-       </property>
-       <property name="maximumSize">
-        <size>
-         <width>48</width>
-         <height>24</height>
-        </size>
-       </property>
-       <property name="text">
-        <string>Home</string>
-       </property>
-      </widget>
-     </item>
-     <item row="2" column="0">
-      <widget class="QLabel" name="label_stepCaption">
-       <property name="text">
-        <string>Step [mm]:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="2" column="1">
-      <widget class="QLineEdit" name="lineEdit_step">
-       <property name="maximumSize">
-        <size>
-         <width>74</width>
-         <height>24</height>
-        </size>
-       </property>
-       <property name="text">
-        <string>0.100</string>
-       </property>
-      </widget>
-     </item>
-     <item row="2" column="2" colspan="3">
-      <layout class="QHBoxLayout" name="stepButtonLayout">
-       <property name="spacing">
-        <number>4</number>
-       </property>
-       <item>
-        <widget class="QPushButton" name="pushButton_stepDown">
-         <property name="minimumSize">
-          <size>
-           <width>28</width>
-           <height>24</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>28</width>
-           <height>24</height>
-          </size>
-         </property>
-         <property name="text">
-          <string>&lt;</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="pushButton_stepUp">
-         <property name="minimumSize">
-          <size>
-           <width>28</width>
-           <height>24</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>28</width>
-           <height>24</height>
-          </size>
-         </property>
-         <property name="text">
-          <string>&gt;</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <spacer name="stepButtonSpacer">
-         <property name="orientation">
-          <enum>Qt::Horizontal</enum>
-         </property>
-         <property name="sizeHint" stdset="0">
-          <size>
-           <width>20</width>
-           <height>20</height>
-          </size>
-         </property>
-        </spacer>
-       </item>
-      </layout>
-     </item>
-     <item row="0" column="5" rowspan="4" colspan="2">
+     <item row="0" column="11" rowspan="3" colspan="4">
       <widget class="QLCDNumber" name="lcdNumber_position">
        <property name="minimumSize">
         <size>
          <width>150</width>
          <height>0</height>
-        </size>
-       </property>
-       <property name="maximumSize">
-        <size>
-         <width>170</width>
-         <height>52</height>
         </size>
        </property>
        <property name="frameShadow">
@@ -359,139 +326,8 @@
        <property name="value" stdset="0">
         <double>0.000000000000000</double>
        </property>
-      </widget>
-     </item>
-     <item row="4" column="0">
-      <widget class="QLabel" name="label_triggerStartCaption">
-       <property name="text">
-        <string>Trigger start [mm]:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="4" column="1">
-      <widget class="QLineEdit" name="lineEdit_triggerStart">
-       <property name="maximumSize">
-        <size>
-         <width>82</width>
-         <height>24</height>
-        </size>
-       </property>
-       <property name="text">
-        <string>0.000</string>
-       </property>
-      </widget>
-     </item>
-     <item row="4" column="2">
-      <widget class="QLabel" name="label_spacingCaption">
-       <property name="text">
-        <string>Spacing [mm]:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="4" column="3" colspan="4">
-      <widget class="QLineEdit" name="lineEdit_triggerInterval">
-       <property name="maximumSize">
-        <size>
-         <width>82</width>
-         <height>24</height>
-        </size>
-       </property>
-       <property name="text">
-        <string>0.100</string>
-       </property>
-      </widget>
-     </item>
-     <item row="5" column="0">
-      <widget class="QLabel" name="label_pulseCountCaption">
-       <property name="text">
-        <string>Pulse count:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="5" column="1">
-      <widget class="QLineEdit" name="lineEdit_triggerCount">
-       <property name="maximumSize">
-        <size>
-         <width>74</width>
-         <height>24</height>
-        </size>
-       </property>
-       <property name="text">
-        <string>1</string>
-       </property>
-      </widget>
-     </item>
-     <item row="5" column="2">
-      <widget class="QLabel" name="label_pulseWidthCaption">
-       <property name="text">
-        <string>Pulse width [us]:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="5" column="3" colspan="4">
-      <widget class="QLineEdit" name="lineEdit_triggerWidth">
-       <property name="maximumSize">
-        <size>
-         <width>82</width>
-         <height>24</height>
-        </size>
-       </property>
-       <property name="text">
-        <string>500</string>
-       </property>
-      </widget>
-     </item>
-     <item row="6" column="0">
-      <widget class="QLabel" name="label_velocityCaption">
-       <property name="text">
-        <string>Velocity [mm/s]:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="6" column="1">
-      <widget class="QLineEdit" name="lineEdit_triggerVelocity">
-       <property name="maximumSize">
-        <size>
-         <width>82</width>
-         <height>24</height>
-        </size>
-       </property>
-       <property name="text">
-        <string>2.000</string>
-       </property>
-      </widget>
-     </item>
-     <item row="6" column="2">
-      <widget class="QLabel" name="label_frequencyCaption">
-       <property name="text">
-        <string>Frequency [Hz]:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="6" column="3" colspan="4">
-      <widget class="QLabel" name="label_triggerFrequency">
-       <property name="minimumSize">
-        <size>
-         <width>70</width>
-         <height>0</height>
-        </size>
-       </property>
-       <property name="text">
-        <string>n/a</string>
-       </property>
-      </widget>
-     </item>
-     <item row="7" column="0" colspan="2">
-      <widget class="QPushButton" name="pushButton_applyTrigger">
-       <property name="text">
-        <string>Apply Trigger</string>
-       </property>
-      </widget>
-     </item>
-     <item row="7" column="2" colspan="5">
-      <widget class="QPushButton" name="pushButton_disableTrigger">
-       <property name="text">
-        <string>Disable Trigger</string>
+       <property name="intValue" stdset="0">
+        <number>0</number>
        </property>
       </widget>
      </item>

@@ -23,16 +23,21 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFrame>
+#include <QGridLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QSize>
 #include <QTimer>
+#include <QToolButton>
 #include <QWidget>
+#include <QWidgetAction>
 #include <QVBoxLayout>
 #include <array>
 
@@ -117,7 +122,7 @@ namespace
             return;
 
         widget->setStyleSheet(QStringLiteral(
-            "QPushButton { min-height: 22px; max-height: 24px; padding-left: 6px; padding-right: 6px; }"
+            "QPushButton, QToolButton { min-height: 22px; max-height: 24px; padding-left: 6px; padding-right: 6px; }"
             "QLineEdit, QComboBox { min-height: 22px; max-height: 24px; }"));
     }
 }
@@ -291,6 +296,7 @@ void thorlabsKinesisPlugin::setAxisControlsBusy(int id, bool busy)
     if (axisUi.triggerVelocityEdit) axisUi.triggerVelocityEdit->setEnabled(enabled);
     if (axisUi.applyTriggerButton) axisUi.applyTriggerButton->setEnabled(enabled);
     if (axisUi.disableTriggerButton) axisUi.disableTriggerButton->setEnabled(enabled);
+    if (axisUi.triggerMenuButton) axisUi.triggerMenuButton->setEnabled(enabled);
     if (axisUi.stopButton) axisUi.stopButton->setEnabled(isInitialized());
 
     refreshAxisStatusUi(id);
@@ -919,6 +925,82 @@ void thorlabsKinesisPlugin::updateTriggerFrequencyUi(int id)
         : QStringLiteral("n/a"));
 }
 
+void thorlabsKinesisPlugin::setupAxisTriggerMenu(AxisUi& axisUi, QWidget* parent)
+{
+    if (!axisUi.triggerMenuButton || !parent)
+        return;
+
+    auto* menu = new QMenu(axisUi.triggerMenuButton);
+    menu->setObjectName(QStringLiteral("triggerMenu"));
+
+    auto* panel = new QWidget(menu);
+    panel->setObjectName(QStringLiteral("triggerMenuPanel"));
+    panel->setStyleSheet(QStringLiteral(
+        "QWidget#triggerMenuPanel { background-color: rgb(235, 235, 235); }"
+        "QLabel { color: black; }"));
+
+    auto* layout = new QGridLayout(panel);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setHorizontalSpacing(6);
+    layout->setVerticalSpacing(4);
+
+    const auto makeLabel = [](const QString& text, QWidget* owner) {
+        auto* label = new QLabel(text, owner);
+        label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        return label;
+    };
+
+    const auto makeEdit = [](const QString& objectName, const QString& text, int width, QWidget* owner) {
+        auto* edit = new QLineEdit(owner);
+        edit->setObjectName(objectName);
+        edit->setText(text);
+        edit->setMinimumHeight(22);
+        edit->setMaximumSize(QSize(width, 24));
+        return edit;
+    };
+
+    axisUi.triggerStartEdit = makeEdit(
+        QStringLiteral("lineEdit_triggerStart"), QStringLiteral("0.000"), 82, panel);
+    axisUi.triggerIntervalEdit = makeEdit(
+        QStringLiteral("lineEdit_triggerInterval"), QStringLiteral("0.100"), 82, panel);
+    axisUi.triggerCountEdit = makeEdit(
+        QStringLiteral("lineEdit_triggerCount"), QStringLiteral("1"), 74, panel);
+    axisUi.triggerWidthEdit = makeEdit(
+        QStringLiteral("lineEdit_triggerWidth"), QStringLiteral("500"), 82, panel);
+    axisUi.triggerVelocityEdit = makeEdit(
+        QStringLiteral("lineEdit_triggerVelocity"), QStringLiteral("2.000"), 82, panel);
+    axisUi.triggerFrequencyValue = new QLabel(QStringLiteral("n/a"), panel);
+    axisUi.triggerFrequencyValue->setObjectName(QStringLiteral("label_triggerFrequency"));
+    axisUi.triggerFrequencyValue->setMinimumWidth(70);
+
+    axisUi.applyTriggerButton = new QPushButton(QStringLiteral("Apply Trigger"), panel);
+    axisUi.applyTriggerButton->setObjectName(QStringLiteral("pushButton_applyTrigger"));
+    axisUi.disableTriggerButton = new QPushButton(QStringLiteral("Disable Trigger"), panel);
+    axisUi.disableTriggerButton->setObjectName(QStringLiteral("pushButton_disableTrigger"));
+
+    layout->addWidget(makeLabel(QStringLiteral("Start [mm]:"), panel), 0, 0);
+    layout->addWidget(axisUi.triggerStartEdit, 0, 1);
+    layout->addWidget(makeLabel(QStringLiteral("Spacing [mm]:"), panel), 0, 2);
+    layout->addWidget(axisUi.triggerIntervalEdit, 0, 3);
+    layout->addWidget(makeLabel(QStringLiteral("Pulse count:"), panel), 1, 0);
+    layout->addWidget(axisUi.triggerCountEdit, 1, 1);
+    layout->addWidget(makeLabel(QStringLiteral("Pulse width [us]:"), panel), 1, 2);
+    layout->addWidget(axisUi.triggerWidthEdit, 1, 3);
+    layout->addWidget(makeLabel(QStringLiteral("Velocity [mm/s]:"), panel), 2, 0);
+    layout->addWidget(axisUi.triggerVelocityEdit, 2, 1);
+    layout->addWidget(makeLabel(QStringLiteral("Frequency [Hz]:"), panel), 2, 2);
+    layout->addWidget(axisUi.triggerFrequencyValue, 2, 3);
+    layout->addWidget(axisUi.applyTriggerButton, 3, 0, 1, 2);
+    layout->addWidget(axisUi.disableTriggerButton, 3, 2, 1, 2);
+
+    auto* triggerAction = new QWidgetAction(menu);
+    triggerAction->setDefaultWidget(panel);
+    menu->addAction(triggerAction);
+
+    axisUi.triggerMenuButton->setMenu(menu);
+    axisUi.triggerMenuButton->setPopupMode(QToolButton::InstantPopup);
+}
+
 void thorlabsKinesisPlugin::refreshAllAxisPositionsUi()
 {
     if (!dock || !isInitialized())
@@ -958,7 +1040,6 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         axisUi.frame = frame;
         axisUi.title = stageFrameUi.label_title;
         axisUi.statusLabel = stageFrameUi.label_status;
-        axisUi.serial = stageFrameUi.label_serial;
         axisUi.positionEdit = stageFrameUi.lineEdit_position;
         axisUi.stepEdit = stageFrameUi.lineEdit_step;
         axisUi.positionLcd = stageFrameUi.lcdNumber_position;
@@ -967,18 +1048,14 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         axisUi.stopButton = stageFrameUi.pushButton_stop;
         axisUi.stepDownButton = stageFrameUi.pushButton_stepDown;
         axisUi.stepUpButton = stageFrameUi.pushButton_stepUp;
-        axisUi.triggerStartEdit = stageFrameUi.lineEdit_triggerStart;
-        axisUi.triggerIntervalEdit = stageFrameUi.lineEdit_triggerInterval;
-        axisUi.triggerCountEdit = stageFrameUi.lineEdit_triggerCount;
-        axisUi.triggerWidthEdit = stageFrameUi.lineEdit_triggerWidth;
-        axisUi.triggerVelocityEdit = stageFrameUi.lineEdit_triggerVelocity;
-        axisUi.triggerFrequencyValue = stageFrameUi.label_triggerFrequency;
-        axisUi.applyTriggerButton = stageFrameUi.pushButton_applyTrigger;
-        axisUi.disableTriggerButton = stageFrameUi.pushButton_disableTrigger;
+        axisUi.triggerMenuButton = stageFrameUi.toolButton_triggerMenu;
+        setupAxisTriggerMenu(axisUi, frame);
 
-        stageFrameUi.label_globalStageID->setText(QString("#%1").arg(ax.globalAxisId));
-        axisUi.title->setText(axisDisplayText(ax));
-        axisUi.serial->setText(ax.baseSerial);
+        stageFrameUi.label_globalStageID->setText(QString("%1.").arg(ax.globalAxisId));
+        axisUi.title->setText(ax.axisName.isEmpty()
+            ? ax.display
+            : QString("%1 %2").arg(ax.isM30xy ? QStringLiteral("M30XY") : QStringLiteral("KVS30"), ax.axisName));
+        frame->setToolTip(QStringLiteral("Serial: %1").arg(ax.baseSerial));
         axisUi.positionEdit->setText(QStringLiteral("0.000"));
         axisUi.stepEdit->setText(ax.isM30xy ? QStringLiteral("0.100") : QStringLiteral("0.010"));
         axisUi.triggerStartEdit->setText(QStringLiteral("0.000"));

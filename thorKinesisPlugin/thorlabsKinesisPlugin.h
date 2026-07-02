@@ -46,6 +46,7 @@ class QLCDNumber;
 class QLineEdit;
 class QPushButton;
 class QTimer;
+class QToolButton;
 class ThorlabsPositionManagerDialog;
 
 class thorlabsKinesisPlugin : public IScanStage
@@ -148,7 +149,6 @@ private:
         QFrame* frame = nullptr;
         QLabel* title = nullptr;
         QLabel* statusLabel = nullptr;
-        QLabel* serial = nullptr;
         QLCDNumber* positionLcd = nullptr;
         QLineEdit* positionEdit = nullptr;
         QLineEdit* stepEdit = nullptr;
@@ -165,6 +165,7 @@ private:
         QPushButton* stepUpButton = nullptr;
         QPushButton* applyTriggerButton = nullptr;
         QPushButton* disableTriggerButton = nullptr;
+        QToolButton* triggerMenuButton = nullptr;
     };
 
     struct PositionConfig
@@ -185,6 +186,7 @@ private:
     void syncLegacyMotionInputsFromAxisUi(int id);
     void syncLegacyTriggerInputsFromAxisUi(int id);
     void updateTriggerFrequencyUi(int id);
+    void setupAxisTriggerMenu(AxisUi& axisUi, QWidget* parent);
     void setMotionUiBusy(bool busy);
     void setAxisControlsBusy(int id, bool busy);
     bool isAxisUiBusy(int id) const;
