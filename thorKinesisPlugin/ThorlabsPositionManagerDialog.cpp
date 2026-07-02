@@ -40,12 +40,17 @@ ThorlabsPositionManagerDialog::ThorlabsPositionManagerDialog(thorlabsKinesisPlug
     setWindowTitle("Thorlabs Position Manager");
     setModal(false);
     resize(680, 420);
+    setStyleSheet(QStringLiteral(
+        "QPushButton { min-height: 22px; padding-left: 6px; padding-right: 6px; }"
+        "QComboBox, QDoubleSpinBox, QLineEdit { min-height: 22px; max-height: 24px; }"));
 
     auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(10, 10, 10, 10);
-    mainLayout->setSpacing(8);
+    mainLayout->setContentsMargins(4, 4, 4, 4);
+    mainLayout->setSpacing(4);
 
     auto* configLayout = new QGridLayout();
+    configLayout->setHorizontalSpacing(2);
+    configLayout->setVerticalSpacing(2);
     configLayout->addWidget(new QLabel("Config:", this), 0, 0);
     m_configCombo = new QComboBox(this);
     configLayout->addWidget(m_configCombo, 0, 1, 1, 4);
@@ -58,6 +63,7 @@ ThorlabsPositionManagerDialog::ThorlabsPositionManagerDialog(thorlabsKinesisPlug
 
     m_axisTable = new QTableWidget(this);
     m_axisTable->setColumnCount(4);
+    m_axisTable->setAlternatingRowColors(true);
     m_axisTable->setHorizontalHeaderLabels(
         QStringList() << "Axis" << "Serial" << "Name" << "Position [mm]");
     m_axisTable->verticalHeader()->setVisible(false);
@@ -68,9 +74,14 @@ ThorlabsPositionManagerDialog::ThorlabsPositionManagerDialog(thorlabsKinesisPlug
     mainLayout->addWidget(m_axisTable, 1);
 
     auto* buttonLayout = new QGridLayout();
+    buttonLayout->setHorizontalSpacing(2);
+    buttonLayout->setVerticalSpacing(2);
     m_getPositionsButton = new QPushButton("Get Current Positions", this);
     m_saveButton = new QPushButton("Save Config", this);
     m_goButton = new QPushButton("Go To Config", this);
+    m_getPositionsButton->setMinimumHeight(44);
+    m_saveButton->setMinimumHeight(44);
+    m_goButton->setMinimumSize(90, 44);
     buttonLayout->addWidget(m_getPositionsButton, 0, 0);
     buttonLayout->addWidget(m_saveButton, 0, 1);
     buttonLayout->addWidget(m_goButton, 0, 2);

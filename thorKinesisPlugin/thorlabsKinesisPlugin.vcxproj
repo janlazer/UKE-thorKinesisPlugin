@@ -148,6 +148,7 @@
     <ClInclude Include="thorlabsKinesisPlugin_global.h" />
   </ItemGroup>
   <ItemGroup>
+    <QtUic Include="stageFrame.ui" />
     <QtUic Include="thorlabsKinesisPlugin_UI.ui" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

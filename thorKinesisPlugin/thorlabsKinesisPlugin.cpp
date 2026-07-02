@@ -17,14 +17,12 @@
 #include "thorlabsKinesisPlugin.h"
 #include "ScanValidation.h"
 #include "ThorlabsPositionManagerDialog.h"
+#include "ui_stageFrame.h"
 
 #include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
-#include <QFont>
 #include <QFrame>
-#include <QGridLayout>
-#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -33,9 +31,8 @@
 #include <QMetaObject>
 #include <QPushButton>
 #include <QSignalBlocker>
-#include <QSizePolicy>
-#include <QSpacerItem>
 #include <QTimer>
+#include <QWidget>
 #include <QVBoxLayout>
 #include <array>
 
@@ -112,6 +109,16 @@ namespace
             return 0;
 
         return static_cast<int32_t>(pulseCount);
+    }
+
+    void applyQMotionLikeWidgetStyle(QWidget* widget)
+    {
+        if (!widget)
+            return;
+
+        widget->setStyleSheet(QStringLiteral(
+            "QPushButton { min-height: 22px; max-height: 24px; padding-left: 6px; padding-right: 6px; }"
+            "QLineEdit, QComboBox { min-height: 22px; max-height: 24px; }"));
     }
 }
 
@@ -783,12 +790,18 @@ void thorlabsKinesisPlugin::refreshAxisPositionUi(int id)
         return;
 
     double positionUm = 0.0;
-    const QString text = readAxisPositionUm(id, positionUm)
+    const bool hasPosition = readAxisPositionUm(id, positionUm);
+    const QString text = hasPosition
         ? mmDisplayWithUnitFromUm(positionUm)
         : QStringLiteral("n/a");
 
-    if (m_axisUi[id].positionValue)
-        m_axisUi[id].positionValue->setText(text);
+    if (m_axisUi[id].positionLcd)
+    {
+        if (hasPosition)
+            m_axisUi[id].positionLcd->display(positionUm / 1000.0);
+        else
+            m_axisUi[id].positionLcd->display(QStringLiteral("--------"));
+    }
 
     if (ui.comboBox_devices->currentIndex() == id)
         ui.label_positionValue->setText(text);
@@ -939,71 +952,40 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         AxisUi axisUi;
 
         auto* frame = new QFrame(ui.scrollAreaWidgetContents_axes);
-        frame->setObjectName(QString("axisFrame_%1").arg(id));
-        frame->setFrameShape(QFrame::StyledPanel);
-        frame->setFrameShadow(QFrame::Raised);
-        frame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+        Ui::stageFrame stageFrameUi;
+        stageFrameUi.setupUi(frame);
 
-        auto* frameLayout = new QVBoxLayout(frame);
-        frameLayout->setContentsMargins(10, 10, 10, 10);
-        frameLayout->setSpacing(8);
+        axisUi.frame = frame;
+        axisUi.title = stageFrameUi.label_title;
+        axisUi.statusLabel = stageFrameUi.label_status;
+        axisUi.serial = stageFrameUi.label_serial;
+        axisUi.positionEdit = stageFrameUi.lineEdit_position;
+        axisUi.stepEdit = stageFrameUi.lineEdit_step;
+        axisUi.positionLcd = stageFrameUi.lcdNumber_position;
+        axisUi.homeButton = stageFrameUi.pushButton_home;
+        axisUi.moveButton = stageFrameUi.pushButton_go;
+        axisUi.stopButton = stageFrameUi.pushButton_stop;
+        axisUi.stepDownButton = stageFrameUi.pushButton_stepDown;
+        axisUi.stepUpButton = stageFrameUi.pushButton_stepUp;
+        axisUi.triggerStartEdit = stageFrameUi.lineEdit_triggerStart;
+        axisUi.triggerIntervalEdit = stageFrameUi.lineEdit_triggerInterval;
+        axisUi.triggerCountEdit = stageFrameUi.lineEdit_triggerCount;
+        axisUi.triggerWidthEdit = stageFrameUi.lineEdit_triggerWidth;
+        axisUi.triggerVelocityEdit = stageFrameUi.lineEdit_triggerVelocity;
+        axisUi.triggerFrequencyValue = stageFrameUi.label_triggerFrequency;
+        axisUi.applyTriggerButton = stageFrameUi.pushButton_applyTrigger;
+        axisUi.disableTriggerButton = stageFrameUi.pushButton_disableTrigger;
 
-        axisUi.title = new QLabel(axisDisplayText(ax), frame);
-        QFont titleFont = axisUi.title->font();
-        titleFont.setBold(true);
-        axisUi.title->setFont(titleFont);
-
-        axisUi.statusLabel = new QLabel("status n/a", frame);
-        axisUi.statusLabel->setAlignment(Qt::AlignCenter);
-        axisUi.statusLabel->setMinimumWidth(90);
-
-        auto* titleRow = new QHBoxLayout();
-        titleRow->setContentsMargins(0, 0, 0, 0);
-        titleRow->addWidget(axisUi.title);
-        titleRow->addStretch(1);
-        titleRow->addWidget(axisUi.statusLabel);
-        frameLayout->addLayout(titleRow);
-
-        auto* grid = new QGridLayout();
-        grid->setColumnStretch(1, 1);
-        grid->setColumnStretch(3, 0);
-        grid->setColumnStretch(4, 0);
-
-        axisUi.serial = new QLabel(ax.baseSerial, frame);
-        axisUi.positionEdit = new QLineEdit("0.000", frame);
-        axisUi.stepEdit = new QLineEdit(ax.isM30xy ? "0.100" : "0.010", frame);
-        axisUi.positionValue = new QLabel("n/a", frame);
-        axisUi.positionValue->setMinimumWidth(90);
-
-        axisUi.homeButton = new QPushButton("Home", frame);
-        axisUi.moveButton = new QPushButton("Go", frame);
-        axisUi.moveButton->setStyleSheet("background-color: green; color: black;");
-        axisUi.stopButton = new QPushButton("Stop", frame);
-        axisUi.stopButton->setStyleSheet("background-color: red; color: black;");
-        axisUi.stepDownButton = new QPushButton("Step-", frame);
-        axisUi.stepUpButton = new QPushButton("Step+", frame);
-
-        grid->addWidget(new QLabel("Serial:", frame), 0, 0);
-        grid->addWidget(axisUi.serial, 0, 1, 1, 4);
-
-        grid->addWidget(new QLabel("Target [mm]:", frame), 1, 0);
-        grid->addWidget(axisUi.positionEdit, 1, 1);
-        grid->addWidget(axisUi.moveButton, 1, 2);
-        grid->addWidget(axisUi.stopButton, 1, 3);
-        grid->addWidget(axisUi.homeButton, 1, 4);
-
-        grid->addWidget(new QLabel("Step [mm]:", frame), 2, 0);
-        grid->addWidget(axisUi.stepEdit, 2, 1);
-        auto* stepButtons = new QWidget(frame);
-        auto* stepButtonsLayout = new QHBoxLayout(stepButtons);
-        stepButtonsLayout->setContentsMargins(0, 0, 0, 0);
-        stepButtonsLayout->setSpacing(4);
-        stepButtonsLayout->addWidget(axisUi.stepDownButton);
-        stepButtonsLayout->addWidget(axisUi.stepUpButton);
-        grid->addWidget(stepButtons, 2, 2, 1, 3);
-
-        grid->addWidget(new QLabel("Current:", frame), 3, 0);
-        grid->addWidget(axisUi.positionValue, 3, 1, 1, 4);
+        stageFrameUi.label_globalStageID->setText(QString("#%1").arg(ax.globalAxisId));
+        axisUi.title->setText(axisDisplayText(ax));
+        axisUi.serial->setText(ax.baseSerial);
+        axisUi.positionEdit->setText(QStringLiteral("0.000"));
+        axisUi.stepEdit->setText(ax.isM30xy ? QStringLiteral("0.100") : QStringLiteral("0.010"));
+        axisUi.triggerStartEdit->setText(QStringLiteral("0.000"));
+        axisUi.triggerIntervalEdit->setText(QStringLiteral("0.100"));
+        axisUi.triggerCountEdit->setText(QStringLiteral("1"));
+        axisUi.triggerWidthEdit->setText(ax.isM30xy ? QStringLiteral("500") : QStringLiteral("1000"));
+        axisUi.positionLcd->display(0.0);
 
         {
             QString velocityText = QStringLiteral("2.000");
@@ -1034,39 +1016,11 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
                 }
             }
 
-            axisUi.triggerStartEdit = new QLineEdit("0.000", frame);
-            axisUi.triggerIntervalEdit = new QLineEdit("0.100", frame);
-            axisUi.triggerCountEdit = new QLineEdit("1", frame);
-            axisUi.triggerWidthEdit = new QLineEdit(ax.isM30xy ? "500" : "1000", frame);
-            axisUi.triggerVelocityEdit = new QLineEdit(velocityText, frame);
-            axisUi.triggerFrequencyValue = new QLabel("n/a", frame);
-            axisUi.triggerFrequencyValue->setMinimumWidth(70);
-            axisUi.applyTriggerButton = new QPushButton("Apply Trigger", frame);
-            axisUi.disableTriggerButton = new QPushButton("Disable Trigger", frame);
-
-            grid->addWidget(new QLabel("Trigger start [mm]:", frame), 4, 0);
-            grid->addWidget(axisUi.triggerStartEdit, 4, 1);
-            grid->addWidget(new QLabel("Spacing [mm]:", frame), 4, 2);
-            grid->addWidget(axisUi.triggerIntervalEdit, 4, 3, 1, 2);
-
-            grid->addWidget(new QLabel("Pulse count:", frame), 5, 0);
-            grid->addWidget(axisUi.triggerCountEdit, 5, 1);
-            grid->addWidget(new QLabel("Pulse width [us]:", frame), 5, 2);
-            grid->addWidget(axisUi.triggerWidthEdit, 5, 3, 1, 2);
-
-            grid->addWidget(new QLabel("Velocity [mm/s]:", frame), 6, 0);
-            grid->addWidget(axisUi.triggerVelocityEdit, 6, 1);
-            grid->addWidget(new QLabel("Frequency [Hz]:", frame), 6, 2);
-            grid->addWidget(axisUi.triggerFrequencyValue, 6, 3, 1, 2);
-
-            grid->addWidget(axisUi.applyTriggerButton, 7, 0, 1, 2);
-            grid->addWidget(axisUi.disableTriggerButton, 7, 2, 1, 3);
+            axisUi.triggerVelocityEdit->setText(velocityText);
         }
 
-        frameLayout->addLayout(grid);
         ui.axisFramesLayout->addWidget(frame);
 
-        axisUi.frame = frame;
         m_axisUi[id] = axisUi;
 
         connect(axisUi.homeButton, &QPushButton::clicked, this, [this, id]() {
@@ -2241,6 +2195,7 @@ void thorlabsKinesisPlugin::initGUI()
         return;
 
     m_guiInitialized = true;
+    applyQMotionLikeWidgetStyle(dock ? dock->widget() : nullptr);
 
     connect(ui.pushButton_refresh, &QPushButton::clicked,
         this, &thorlabsKinesisPlugin::slot_refresh, Qt::UniqueConnection);
@@ -2278,6 +2233,8 @@ void thorlabsKinesisPlugin::initGUI()
     ui.lineEdit_trigInterval->setText("0");
     ui.lineEdit_trigCount->setText("1");
     ui.lineEdit_trigWidth->setText("50000");
+    ui.pushButton_stop->setStyleSheet("background-color: red; color: black;");
+    ui.pushButton_position->setStyleSheet("background-color: green;");
 
     rebuildAxisFrames();
     setMotionUiBusy(false);
@@ -2412,8 +2369,8 @@ void thorlabsKinesisPlugin::slot_getPosition()
 
     const QString text = mmDisplayWithUnitFromUm(pUm);
     ui.label_positionValue->setText(text);
-    if (id < m_axisUi.size() && m_axisUi[id].positionValue)
-        m_axisUi[id].positionValue->setText(text);
+    if (id < m_axisUi.size() && m_axisUi[id].positionLcd)
+        m_axisUi[id].positionLcd->display(pUm / 1000.0);
 }
 
 void thorlabsKinesisPlugin::slot_openLogger()

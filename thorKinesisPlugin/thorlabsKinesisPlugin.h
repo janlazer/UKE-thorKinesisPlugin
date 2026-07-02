@@ -42,6 +42,7 @@
 
 class QFrame;
 class QLabel;
+class QLCDNumber;
 class QLineEdit;
 class QPushButton;
 class QTimer;
@@ -148,7 +149,7 @@ private:
         QLabel* title = nullptr;
         QLabel* statusLabel = nullptr;
         QLabel* serial = nullptr;
-        QLabel* positionValue = nullptr;
+        QLCDNumber* positionLcd = nullptr;
         QLineEdit* positionEdit = nullptr;
         QLineEdit* stepEdit = nullptr;
         QLineEdit* triggerStartEdit = nullptr;
