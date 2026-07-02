@@ -26,6 +26,9 @@ constexpr int kHomeIdleWithoutHomeSamples = kHomeIdleWithoutHomeTimeoutMs / kWai
 constexpr int kStablePositionSamples = 5;
 constexpr int kMoveStartGraceMs = 1000;
 constexpr int kMoveStartGraceSamples = kMoveStartGraceMs / kWaitPollIntervalMs;
+constexpr int kReadyPollIntervalMs = 20;
+constexpr int kPollingReadyTimeoutMs = 1200;
+constexpr int kEnableReadyTimeoutMs = 1500;
 constexpr double kTrackSettleCycleMs = 0.1024;
 constexpr unsigned kTrackSettleMaxTimeCycles = 0x7FFF;
 
@@ -62,6 +65,38 @@ constexpr unsigned short kKvs30TrackSettleSettledError = 20;
 constexpr unsigned short kKvs30TrackSettleMaxTrackingError = 0;
 constexpr unsigned kKvs30MaxSafeTrackSettleTimeCycles = 1000; // 102.4 ms
 constexpr unsigned kKvs30MaxSafeTrackSettleErrorCounts = 1000;
+
+int elapsedMsSince(std::chrono::steady_clock::time_point start)
+{
+    return static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count());
+}
+
+template <typename Predicate>
+bool waitUntilReady(const char* context, const std::string& serial,
+    int timeoutMs, int pollIntervalMs, Predicate predicate)
+{
+    const auto start = std::chrono::steady_clock::now();
+    while (true)
+    {
+        if (predicate())
+        {
+            qDebug() << context << "ready serial=" << serial.c_str()
+                << "elapsedMs=" << elapsedMsSince(start);
+            return true;
+        }
+
+        if (elapsedMsSince(start) >= timeoutMs)
+        {
+            qDebug() << context << "TIMEOUT serial=" << serial.c_str()
+                << "timeoutMs=" << timeoutMs;
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
+    }
+}
 
 bool isValidTriggerMode(int mode)
 {
@@ -229,12 +264,20 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
     m_serialCStr = m_serial.c_str();
 
     qDebug() << "KVSStage::open serial=" << m_serialCStr << "home=" << home;
+    const auto openStart = std::chrono::steady_clock::now();
+    auto logOpenTiming = [&](const char* step)
+    {
+        qDebug() << "KVSStage::open timing" << step
+            << "serial=" << m_serialCStr
+            << "elapsedMs=" << elapsedMsSince(openStart);
+    };
 
     short err = KVS_Open(m_serialCStr);
     if (!okOrLog("KVS_Open", m_serial, err, errOut))
         return false;
 
     m_isOpen = true;
+    logOpenTiming("handle opened");
 
     const bool loaded = KVS_LoadNamedSettings(m_serialCStr, "KVS30");
     qDebug() << "KVSStage::open KVS_LoadNamedSettings(KVS30) loaded=" << loaded;
@@ -254,6 +297,7 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
     }
 
     sleepMs(300);
+    logOpenTiming("initial settings requested");
 
     qDebug() << "KVSStage::open applying KVS30/M safe runtime defaults serial=" << m_serialCStr;
 
@@ -378,6 +422,7 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
         return false;
     }
     sleepMs(300);
+    logOpenTiming("runtime defaults requested");
 
     MOT_BrushlessTrackSettleParameters trackSettleParams = {};
     err = KVS_RequestTrackSettleParams(m_serialCStr);
@@ -441,6 +486,7 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
             << "expectedPitch=" << kKvs30ExpectedPitchMm;
     }
     sleepMs(300);
+    logOpenTiming("motor params validated");
 
     // Read conversion factors from Kinesis.
     // For linear stages, real units are assumed to be mm.
@@ -549,7 +595,7 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
         return false;
     }
 
-    sleepMs(500);
+    logOpenTiming("axis safety validated");
 
     bool poll = KVS_StartPolling(m_serialCStr, 200);
     if (!okOrLog("KVS_StartPolling", m_serial, poll ? 0 : -1, errOut))
@@ -558,7 +604,14 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
         return false;
     }
 
-    sleepMs(1000);
+    if (!waitUntilReady("KVSStage::open polling", m_serial,
+        kPollingReadyTimeoutMs, kReadyPollIntervalMs,
+        [&]() { return KVS_PollingDuration(m_serialCStr) > 0; }))
+    {
+        if (errOut) *errOut = kErrTimeout;
+        close();
+        return false;
+    }
 
     if (!enable(errOut))
     {
@@ -566,7 +619,7 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
         return false;
     }
 
-    sleepMs(500);
+    logOpenTiming("polling and enable ready");
     if (home)
     {
         if (!this->home(errOut))
@@ -577,6 +630,7 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
     }
 
     if (errOut) *errOut = 0;
+    logOpenTiming("done");
     return true;
 }
 
@@ -622,10 +676,16 @@ bool KVSStage::enableIfNeeded(unsigned channel, short* errOut)
     if (!okOrLog("KVS_EnableChannel", m_serial, err, errOut))
         return false;
 
-    sleepMs(300);
+    const bool enabled = waitUntilReady("KVSStage::enableIfNeeded", m_serial,
+        kEnableReadyTimeoutMs, kReadyPollIntervalMs,
+        [&]()
+        {
+            KVS_RequestStatusBits(m_serialCStr);
+            bits = static_cast<uint32_t>(KVS_GetStatusBits(m_serialCStr));
+            return isChannelEnabled(bits);
+        });
 
-    bits = (uint32_t)KVS_GetStatusBits(m_serialCStr);
-    if (!isChannelEnabled(bits))
+    if (!enabled)
     {
         if (errOut) *errOut = -1;
         return false;

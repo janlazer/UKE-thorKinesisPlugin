@@ -57,6 +57,43 @@ constexpr double kBdcM30MaxSingleRelativeMoveUm = 1000.0;
 constexpr double kBdcM30MaxCoordinateMagnitudeUm = 31000.0;
 constexpr double kBdcM30MinTravelUm = 1000.0;
 constexpr double kBdcM30MaxTravelUm = 31000.0;
+constexpr int kReadyPollIntervalMs = 20;
+constexpr int kPollingReadyTimeoutMs = 1200;
+constexpr int kEnableReadyTimeoutMs = 1500;
+
+int elapsedMsSince(std::chrono::steady_clock::time_point start)
+{
+    return static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count());
+}
+
+template <typename Predicate>
+bool waitUntilReady(const char* context, const std::string& serial, unsigned channel,
+    int timeoutMs, int pollIntervalMs, Predicate predicate)
+{
+    const auto start = std::chrono::steady_clock::now();
+    while (true)
+    {
+        if (predicate())
+        {
+            qDebug() << context << "ready serial=" << serial.c_str()
+                << "ch=" << channel
+                << "elapsedMs=" << elapsedMsSince(start);
+            return true;
+        }
+
+        if (elapsedMsSince(start) >= timeoutMs)
+        {
+            qDebug() << context << "TIMEOUT serial=" << serial.c_str()
+                << "ch=" << channel
+                << "timeoutMs=" << timeoutMs;
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
+    }
+}
 
 bool isValidTriggerMode(int mode)
 {
@@ -242,6 +279,13 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
     }
 
     qDebug() << "BDCStage::open serial=" << m_serialCStr << "home=" << home;
+    const auto openStart = std::chrono::steady_clock::now();
+    auto logOpenTiming = [&](const char* step)
+    {
+        qDebug() << "BDCStage::open timing" << step
+            << "serial=" << m_serialCStr
+            << "elapsedMs=" << elapsedMsSince(openStart);
+    };
 
     short err = BDC_Open(m_serialCStr);
     if (!okOrLog("BDC_Open", m_serial, err, 0, errOut))
@@ -250,6 +294,7 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
     // From this point on close() must always release the SDK handle, even when
     // settings, polling, enabling or homing fail later in this method.
     m_isOpen = true;
+    logOpenTiming("handle opened");
 
     auto convertM30RuntimeDefault = [&](short ch, double value, int unitType, const char* label, int fallbackDeviceUnits) -> int
     {
@@ -430,6 +475,7 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
         }
     }
     sleepMs(300);
+    logOpenTiming("runtime defaults requested");
 
     for (short ch = 1; ch <= 2; ++ch)
     {
@@ -465,6 +511,7 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
 
         sleepMs(300);
     }
+    logOpenTiming("motor params validated");
 
     // Read conversion factors per channel.
     // For linear stages, real units are assumed to be mm.
@@ -590,7 +637,7 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
         m_positionSafetyReady[idx] = true;
     }
 
-    sleepMs(500);
+    logOpenTiming("axis safety validated");
 
     if (!startPollingAll(errOut))
     {
@@ -614,6 +661,7 @@ bool BDCStage::open(const std::string& baseSerial, bool home, short* errOut)
             return false;
         }
     }
+    logOpenTiming("done");
 
     qDebug() << "BDCStage::open OK serial=" << m_serial.c_str();
     if (errOut) *errOut = 0;
@@ -633,7 +681,22 @@ bool BDCStage::startPollingAll(short* errOut)
     if (!okOrLog("BDC_StartPolling", m_serial, poll2 ? 0 : -1, 2, errOut))
         return false;
 
-    sleepMs(1000);
+    if (!waitUntilReady("BDCStage::startPollingAll", m_serial, 1,
+        kPollingReadyTimeoutMs, kReadyPollIntervalMs,
+        [&]() { return BDC_PollingDuration(m_serialCStr, 1) > 0; }))
+    {
+        if (errOut) *errOut = kErrTimeout;
+        return false;
+    }
+
+    if (!waitUntilReady("BDCStage::startPollingAll", m_serial, 2,
+        kPollingReadyTimeoutMs, kReadyPollIntervalMs,
+        [&]() { return BDC_PollingDuration(m_serialCStr, 2) > 0; }))
+    {
+        if (errOut) *errOut = kErrTimeout;
+        return false;
+    }
+
     return true;
 }
 
@@ -654,10 +717,16 @@ bool BDCStage::enableIfNeeded(unsigned channel, short* errOut)
     if (!okOrLog("BDC_EnableChannel", m_serial, err, channel, errOut))
         return false;
 
-    sleepMs(300);
+    const bool enabled = waitUntilReady("BDCStage::enableIfNeeded", m_serial, channel,
+        kEnableReadyTimeoutMs, kReadyPollIntervalMs,
+        [&]()
+        {
+            BDC_RequestStatusBits(m_serialCStr, static_cast<short>(channel));
+            bits = static_cast<uint32_t>(BDC_GetStatusBits(m_serialCStr, static_cast<short>(channel)));
+            return isChannelEnabled(bits);
+        });
 
-    bits = (uint32_t)BDC_GetStatusBits(m_serialCStr, (short)channel);
-    if (!isChannelEnabled(bits))
+    if (!enabled)
     {
         if (errOut) *errOut = -1;
         return false;
