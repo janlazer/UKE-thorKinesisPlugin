@@ -228,7 +228,6 @@ private:
 private:
     Ui::DockWidget ui;
     QDockWidget* dock = nullptr;
-    QDockWidget* dockLogger = nullptr;
 
     QString author;
     QString className;
@@ -257,10 +256,9 @@ private:
     std::atomic_bool m_stopRequested{ false };
 
 public slots:
-    void slot_refresh();
+    void slot_detect();
     void slot_deviceChanged(int);
     void slot_goHome();
-    void slot_openLogger();
     void slot_moveStepForward();
     void slot_moveStepBackward();
     void slot_stopMotor();

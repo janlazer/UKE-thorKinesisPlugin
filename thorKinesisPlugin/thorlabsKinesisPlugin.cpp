@@ -50,6 +50,8 @@ namespace
     constexpr double kMaximumLaserTriggerFrequencyHz = 20.0;
     constexpr double kScanLineAxisToleranceUm = 1e-6;
     constexpr int kPositionRefreshIntervalMs = 1000;
+    constexpr int kStageFrameWidth = 590;
+    constexpr int kSerialButtonHeight = 24;
 
     ScanValidationResult scanValidationError(ScanValidationError error,
         std::size_t layerIndex = 0,
@@ -196,14 +198,14 @@ thorlabsKinesisPlugin::thorlabsKinesisPlugin()
 
     dock = new QDockWidget();
     ui.setupUi(dock);
+    dock->setMinimumWidth(kStageFrameWidth + 8);
+    if (dock->widget())
+        dock->widget()->setMinimumWidth(kStageFrameWidth);
+    ui.scrollArea_axes->setMinimumWidth(kStageFrameWidth);
+    ui.scrollAreaWidgetContents_axes->setMinimumWidth(kStageFrameWidth);
     dock->setWindowTitle(getName());
 
-    dockLogger = new QDockWidget();
-    dockLogger->setWindowTitle(getName() + QString(" - Logger"));
-    dockLogger->hide();
-
     connect(dock, &QObject::destroyed, this, [this]() { dock = nullptr; });
-    connect(dockLogger, &QObject::destroyed, this, [this]() { dockLogger = nullptr; });
 
     initGUI();
 
@@ -219,8 +221,6 @@ thorlabsKinesisPlugin::~thorlabsKinesisPlugin()
         delete m_positionManagerWindow;
         m_positionManagerWindow = nullptr;
     }
-    if (dockLogger)
-        delete dockLogger;
     if (dock && !dock->parent())
         delete dock;
 }
@@ -247,7 +247,6 @@ void thorlabsKinesisPlugin::setLoadValueInformation(QMap<QString, QString> /*map
 
 void thorlabsKinesisPlugin::showSettingsWindow()
 {
-    slot_openLogger();
 }
 
 BDCStage* thorlabsKinesisPlugin::m30xyForBase(const QString& baseSerial)
@@ -306,7 +305,7 @@ void thorlabsKinesisPlugin::setMotionUiBusy(bool busy)
 {
     const bool anyBusy = busy || m_motionTaskActive.load() || !m_axisMotionThreads.isEmpty();
 
-    ui.pushButton_refresh->setEnabled(!anyBusy);
+    ui.pushButton_detect->setEnabled(!anyBusy);
     ui.comboBox_devices->setEnabled(!anyBusy);
     ui.pushButton_home->setEnabled(!anyBusy);
     ui.pushButton_position->setEnabled(!anyBusy);
@@ -1027,6 +1026,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
     }
 
     m_axisUi.resize(m_axes.size());
+    QMap<QString, QVBoxLayout*> serialLayouts;
 
     for (int id = 0; id < m_axes.size(); ++id)
     {
@@ -1095,8 +1095,38 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
 
             axisUi.triggerVelocityEdit->setText(velocityText);
         }
+        frame->setMinimumWidth(kStageFrameWidth);
 
-        ui.axisFramesLayout->addWidget(frame);
+        const QString serialKey = ax.baseSerial.isEmpty() ? axisKey(ax) : ax.baseSerial;
+        if (!serialLayouts.contains(serialKey))
+        {
+            const QString serialTitle = QString("%1 %2")
+                .arg(ax.isM30xy ? QStringLiteral("M30XY") : QStringLiteral("KVS30"), serialKey);
+            auto* serialButton = new QPushButton(serialTitle + QStringLiteral(" >>>"),
+                ui.scrollAreaWidgetContents_axes);
+            serialButton->setCheckable(true);
+            serialButton->setMinimumWidth(kStageFrameWidth);
+            serialButton->setFixedHeight(kSerialButtonHeight);
+            ui.axisFramesLayout->addWidget(serialButton, 0, Qt::AlignLeft);
+
+            auto* serialWidget = new QWidget(ui.scrollAreaWidgetContents_axes);
+            serialWidget->setMinimumWidth(kStageFrameWidth);
+            auto* serialLayout = new QVBoxLayout(serialWidget);
+            serialLayout->setContentsMargins(0, 0, 0, 0);
+            serialLayout->setSpacing(4);
+            ui.axisFramesLayout->addWidget(serialWidget, 0, Qt::AlignLeft);
+
+            connect(serialButton, &QPushButton::toggled, this,
+                [serialButton, serialWidget, serialTitle](bool collapsed) {
+                    serialWidget->setVisible(!collapsed);
+                    serialButton->setText(serialTitle + (collapsed
+                        ? QStringLiteral(" <<<")
+                        : QStringLiteral(" >>>")));
+                });
+            serialLayouts.insert(serialKey, serialLayout);
+        }
+
+        serialLayouts.value(serialKey)->addWidget(frame);
 
         m_axisUi[id] = axisUi;
 
@@ -2274,8 +2304,8 @@ void thorlabsKinesisPlugin::initGUI()
     m_guiInitialized = true;
     applyQMotionLikeWidgetStyle(dock ? dock->widget() : nullptr);
 
-    connect(ui.pushButton_refresh, &QPushButton::clicked,
-        this, &thorlabsKinesisPlugin::slot_refresh, Qt::UniqueConnection);
+    connect(ui.pushButton_detect, &QPushButton::clicked,
+        this, &thorlabsKinesisPlugin::slot_detect, Qt::UniqueConnection);
     connect(ui.comboBox_devices, QOverload<int>::of(&QComboBox::currentIndexChanged),
         this, &thorlabsKinesisPlugin::slot_deviceChanged, Qt::UniqueConnection);
 
@@ -2294,8 +2324,6 @@ void thorlabsKinesisPlugin::initGUI()
     connect(ui.pushButton_stepDown, &QPushButton::clicked,
         this, &thorlabsKinesisPlugin::slot_moveStepBackward, Qt::UniqueConnection);
 
-    connect(ui.pushButton_logger, &QPushButton::clicked,
-        this, &thorlabsKinesisPlugin::slot_openLogger, Qt::UniqueConnection);
     connect(ui.pushButton_positionManager, &QPushButton::clicked,
         this, &thorlabsKinesisPlugin::slot_openPositionManager, Qt::UniqueConnection);
 
@@ -2326,9 +2354,9 @@ void thorlabsKinesisPlugin::initGUI()
     qDebug() << className << "::initGUI - signals connected";
 }
 
-void thorlabsKinesisPlugin::slot_refresh()
+void thorlabsKinesisPlugin::slot_detect()
 {
-    qDebug() << className << "::slot_refresh";
+    qDebug() << className << "::slot_detect";
     if (m_motionThread || !m_axisMotionThreads.isEmpty())
         return;
     detect();
@@ -2448,14 +2476,6 @@ void thorlabsKinesisPlugin::slot_getPosition()
     ui.label_positionValue->setText(text);
     if (id < m_axisUi.size() && m_axisUi[id].positionLcd)
         m_axisUi[id].positionLcd->display(pUm / 1000.0);
-}
-
-void thorlabsKinesisPlugin::slot_openLogger()
-{
-    qDebug() << className << "::slot_openLogger";
-    if (!dockLogger) return;
-    dockLogger->show();
-    dockLogger->raise();
 }
 
 void thorlabsKinesisPlugin::openPositionManager()
