@@ -50,8 +50,18 @@ namespace
     constexpr double kMaximumLaserTriggerFrequencyHz = 20.0;
     constexpr double kScanLineAxisToleranceUm = 1e-6;
     constexpr int kPositionRefreshIntervalMs = 1000;
-    constexpr int kStageFrameWidth = 590;
+    constexpr int kStageFrameWidth = 680;
     constexpr int kSerialButtonHeight = 24;
+
+    int preferredWidgetHeight(QWidget* widget)
+    {
+        if (!widget)
+            return 0;
+
+        widget->ensurePolished();
+        const QSize hint = widget->sizeHint();
+        return qMax(widget->minimumHeight(), hint.height());
+    }
 
     ScanValidationResult scanValidationError(ScanValidationError error,
         std::size_t layerIndex = 0,
@@ -145,7 +155,9 @@ static bool parseI32(const QString& s, int32_t& value)
 static bool parseFiniteDouble(const QString& s, double& value)
 {
     bool ok = false;
-    const double parsed = s.trimmed().toDouble(&ok);
+    QString normalized = s.trimmed();
+    normalized.replace(',', '.');
+    const double parsed = normalized.toDouble(&ok);
     if (!ok || !std::isfinite(parsed))
         return false;
 
@@ -153,9 +165,14 @@ static bool parseFiniteDouble(const QString& s, double& value)
     return true;
 }
 
+static QString guiDecimalText(double value, int precision = 3)
+{
+    return QString::number(value, 'f', precision).replace('.', ',');
+}
+
 static QString mmDisplayTextFromUm(double valueUm)
 {
-    return QString::number(valueUm / 1000.0, 'f', 3);
+    return guiDecimalText(valueUm / 1000.0);
 }
 
 static QString mmDisplayWithUnitFromUm(double valueUm)
@@ -173,7 +190,7 @@ static QString frequencyDisplayText(double velocityMmS, double spacingMm)
         return QStringLiteral("n/a");
     }
 
-    return QString::number(velocityMmS / spacingMm, 'f', 3);
+    return guiDecimalText(velocityMmS / spacingMm);
 }
 
 static bool looksLikeBaseM30XYSerial(const QString& serial)
@@ -201,8 +218,7 @@ thorlabsKinesisPlugin::thorlabsKinesisPlugin()
     dock->setMinimumWidth(kStageFrameWidth + 8);
     if (dock->widget())
         dock->widget()->setMinimumWidth(kStageFrameWidth);
-    ui.scrollArea_axes->setMinimumWidth(kStageFrameWidth);
-    ui.scrollAreaWidgetContents_axes->setMinimumWidth(kStageFrameWidth);
+    ui.stageFrameContainer->setMinimumWidth(kStageFrameWidth);
     dock->setWindowTitle(getName());
 
     connect(dock, &QObject::destroyed, this, [this]() { dock = nullptr; });
@@ -727,6 +743,46 @@ void thorlabsKinesisPlugin::clearAxisFrames()
     m_axisUi.clear();
 }
 
+void thorlabsKinesisPlugin::updateAxisFrameAreaHeight()
+{
+    if (!ui.stageFrameContainer || !ui.axisFramesLayout)
+        return;
+
+    ui.axisFramesLayout->activate();
+    const QMargins margins = ui.axisFramesLayout->contentsMargins();
+    int height = margins.top() + margins.bottom();
+    int visibleWidgets = 0;
+    const int spacing = qMax(0, ui.axisFramesLayout->spacing());
+
+    for (int index = 0; index < ui.axisFramesLayout->count(); ++index)
+    {
+        QLayoutItem* item = ui.axisFramesLayout->itemAt(index);
+        QWidget* widget = item ? item->widget() : nullptr;
+        if (!widget || widget->isHidden())
+            continue;
+
+        height += preferredWidgetHeight(widget);
+        ++visibleWidgets;
+    }
+
+    if (visibleWidgets > 1)
+        height += (visibleWidgets - 1) * spacing;
+
+    ui.stageFrameContainer->setMinimumHeight(height);
+    ui.stageFrameContainer->setMaximumHeight(height > 0 ? height : QWIDGETSIZE_MAX);
+    ui.stageFrameContainer->updateGeometry();
+
+    if (dock && dock->widget() && dock->widget()->layout())
+        dock->widget()->layout()->activate();
+    if (dock)
+    {
+        const int dockHeight = qMax(90, dock->minimumSizeHint().height());
+        dock->setMinimumHeight(dockHeight);
+        dock->resize(qMax(dock->width(), dock->minimumWidth()), dockHeight);
+        dock->updateGeometry();
+    }
+}
+
 void thorlabsKinesisPlugin::selectAxis(int id)
 {
     if (id < 0 || id >= m_axes.size())
@@ -898,7 +954,7 @@ void thorlabsKinesisPlugin::refreshAxisStatusUi(int id)
     {
         m_axisUi[id].statusLabel->setText(text);
         m_axisUi[id].statusLabel->setStyleSheet(
-            QStringLiteral("background-color: %1; color: black; border: 1px solid gray; padding: 2px 6px;")
+            QStringLiteral("background-color: %1; color: black; border: none; padding: 2px 6px;")
                 .arg(color));
     }
 }
@@ -959,15 +1015,15 @@ void thorlabsKinesisPlugin::setupAxisTriggerMenu(AxisUi& axisUi, QWidget* parent
     };
 
     axisUi.triggerStartEdit = makeEdit(
-        QStringLiteral("lineEdit_triggerStart"), QStringLiteral("0.000"), 82, panel);
+        QStringLiteral("lineEdit_triggerStart"), QStringLiteral("0,000"), 82, panel);
     axisUi.triggerIntervalEdit = makeEdit(
-        QStringLiteral("lineEdit_triggerInterval"), QStringLiteral("0.100"), 82, panel);
+        QStringLiteral("lineEdit_triggerInterval"), QStringLiteral("0,100"), 82, panel);
     axisUi.triggerCountEdit = makeEdit(
         QStringLiteral("lineEdit_triggerCount"), QStringLiteral("1"), 74, panel);
     axisUi.triggerWidthEdit = makeEdit(
         QStringLiteral("lineEdit_triggerWidth"), QStringLiteral("500"), 82, panel);
     axisUi.triggerVelocityEdit = makeEdit(
-        QStringLiteral("lineEdit_triggerVelocity"), QStringLiteral("2.000"), 82, panel);
+        QStringLiteral("lineEdit_triggerVelocity"), QStringLiteral("2,000"), 82, panel);
     axisUi.triggerFrequencyValue = new QLabel(QStringLiteral("n/a"), panel);
     axisUi.triggerFrequencyValue->setObjectName(QStringLiteral("label_triggerFrequency"));
     axisUi.triggerFrequencyValue->setMinimumWidth(70);
@@ -1016,12 +1072,12 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
     if (m_axes.isEmpty())
     {
         auto* emptyLabel = new QLabel("No axes detected. Please run Refresh / Detect.",
-            ui.scrollAreaWidgetContents_axes);
+            ui.stageFrameContainer);
         emptyLabel->setAlignment(Qt::AlignCenter);
         emptyLabel->setWordWrap(true);
         emptyLabel->setMinimumHeight(80);
         ui.axisFramesLayout->addWidget(emptyLabel);
-        ui.axisFramesLayout->addStretch(1);
+        updateAxisFrameAreaHeight();
         return;
     }
 
@@ -1033,7 +1089,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         const AxisEntry& ax = m_axes[id];
         AxisUi axisUi;
 
-        auto* frame = new QFrame(ui.scrollAreaWidgetContents_axes);
+        auto* frame = new QFrame(ui.stageFrameContainer);
         Ui::stageFrame stageFrameUi;
         stageFrameUi.setupUi(frame);
 
@@ -1048,7 +1104,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         axisUi.stopButton = stageFrameUi.pushButton_stop;
         axisUi.stepDownButton = stageFrameUi.pushButton_stepDown;
         axisUi.stepUpButton = stageFrameUi.pushButton_stepUp;
-        axisUi.triggerMenuButton = stageFrameUi.toolButton_triggerMenu;
+        axisUi.triggerMenuButton = stageFrameUi.toolButton_preferences;
         setupAxisTriggerMenu(axisUi, frame);
 
         stageFrameUi.label_globalStageID->setText(QString("%1.").arg(ax.globalAxisId));
@@ -1056,16 +1112,16 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
             ? ax.display
             : QString("%1 %2").arg(ax.isM30xy ? QStringLiteral("M30XY") : QStringLiteral("KVS30"), ax.axisName));
         frame->setToolTip(QStringLiteral("Serial: %1").arg(ax.baseSerial));
-        axisUi.positionEdit->setText(QStringLiteral("0.000"));
-        axisUi.stepEdit->setText(ax.isM30xy ? QStringLiteral("0.100") : QStringLiteral("0.010"));
-        axisUi.triggerStartEdit->setText(QStringLiteral("0.000"));
-        axisUi.triggerIntervalEdit->setText(QStringLiteral("0.100"));
+        axisUi.positionEdit->setText(QStringLiteral("0,000"));
+        axisUi.stepEdit->setText(ax.isM30xy ? QStringLiteral("0,100") : QStringLiteral("0,010"));
+        axisUi.triggerStartEdit->setText(QStringLiteral("0,000"));
+        axisUi.triggerIntervalEdit->setText(QStringLiteral("0,100"));
         axisUi.triggerCountEdit->setText(QStringLiteral("1"));
         axisUi.triggerWidthEdit->setText(ax.isM30xy ? QStringLiteral("500") : QStringLiteral("1000"));
         axisUi.positionLcd->display(0.0);
 
         {
-            QString velocityText = QStringLiteral("2.000");
+            QString velocityText = QStringLiteral("2,000");
             short err = 0;
             if (ax.isM30xy)
             {
@@ -1076,7 +1132,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
                         const double velocityMmS = stage->getMaxVelocityMmS(
                             static_cast<unsigned>(ax.channel), &err);
                         if (err == 0 && std::isfinite(velocityMmS) && velocityMmS > 0.0)
-                            velocityText = QString::number(velocityMmS, 'f', 3);
+                            velocityText = guiDecimalText(velocityMmS);
                     }
                 }
             }
@@ -1088,7 +1144,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
                     {
                         const double velocityMmS = stage->getMaxVelocityMmS(&err);
                         if (err == 0 && std::isfinite(velocityMmS) && velocityMmS > 0.0)
-                            velocityText = QString::number(velocityMmS, 'f', 3);
+                            velocityText = guiDecimalText(velocityMmS);
                     }
                 }
             }
@@ -1103,25 +1159,25 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
             const QString serialTitle = QString("%1 %2")
                 .arg(ax.isM30xy ? QStringLiteral("M30XY") : QStringLiteral("KVS30"), serialKey);
             auto* serialButton = new QPushButton(serialTitle + QStringLiteral(" >>>"),
-                ui.scrollAreaWidgetContents_axes);
+                ui.stageFrameContainer);
             serialButton->setCheckable(true);
-            serialButton->setMinimumWidth(kStageFrameWidth);
-            serialButton->setFixedHeight(kSerialButtonHeight);
+            serialButton->setFixedSize(kStageFrameWidth, kSerialButtonHeight);
             ui.axisFramesLayout->addWidget(serialButton, 0, Qt::AlignLeft);
 
-            auto* serialWidget = new QWidget(ui.scrollAreaWidgetContents_axes);
-            serialWidget->setMinimumWidth(kStageFrameWidth);
+            auto* serialWidget = new QWidget(ui.stageFrameContainer);
+            serialWidget->setFixedWidth(kStageFrameWidth);
             auto* serialLayout = new QVBoxLayout(serialWidget);
             serialLayout->setContentsMargins(0, 0, 0, 0);
             serialLayout->setSpacing(4);
             ui.axisFramesLayout->addWidget(serialWidget, 0, Qt::AlignLeft);
 
             connect(serialButton, &QPushButton::toggled, this,
-                [serialButton, serialWidget, serialTitle](bool collapsed) {
+                [this, serialButton, serialWidget, serialTitle](bool collapsed) {
                     serialWidget->setVisible(!collapsed);
                     serialButton->setText(serialTitle + (collapsed
                         ? QStringLiteral(" <<<")
                         : QStringLiteral(" >>>")));
+                    updateAxisFrameAreaHeight();
                 });
             serialLayouts.insert(serialKey, serialLayout);
         }
@@ -1187,8 +1243,8 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         refreshAxisStatusUi(id);
     }
 
-    ui.axisFramesLayout->addStretch(1);
     setMotionUiBusy(m_motionTaskActive.load());
+    updateAxisFrameAreaHeight();
 }
 
 void thorlabsKinesisPlugin::refreshAxisUi()

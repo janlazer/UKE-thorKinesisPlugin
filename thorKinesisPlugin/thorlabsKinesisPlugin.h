@@ -187,6 +187,7 @@ private:
     void syncLegacyTriggerInputsFromAxisUi(int id);
     void updateTriggerFrequencyUi(int id);
     void setupAxisTriggerMenu(AxisUi& axisUi, QWidget* parent);
+    void updateAxisFrameAreaHeight();
     void setMotionUiBusy(bool busy);
     void setAxisControlsBusy(int id, bool busy);
     bool isAxisUiBusy(int id) const;
