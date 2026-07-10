@@ -226,11 +226,12 @@ thorlabsKinesisPlugin::thorlabsKinesisPlugin()
 
     dock = new QDockWidget();
     ui.setupUi(dock);
+    dock->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
     dock->setMinimumWidth(kStageFrameWidth + 8);
     if (dock->widget())
     {
         dock->widget()->setMinimumWidth(kStageFrameWidth);
-        dock->widget()->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+        dock->widget()->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     }
     ui.verticalLayout->setAlignment(Qt::AlignTop);
     ui.topBarLayout->setAlignment(Qt::AlignLeft | Qt::AlignTop);
@@ -1186,8 +1187,6 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
 
             axisUi.triggerVelocityEdit->setText(velocityText);
         }
-        frame->setMinimumWidth(kStageFrameWidth);
-
         const QString serialKey = ax.baseSerial.isEmpty() ? axisKey(ax) : ax.baseSerial;
         if (!serialLayouts.contains(serialKey))
         {
@@ -1220,7 +1219,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
             serialWidget->setFixedWidth(kStageFrameWidth);
             auto* serialLayout = new QVBoxLayout(serialWidget);
             serialLayout->setContentsMargins(0, 0, 0, 0);
-            serialLayout->setSpacing(4);
+            serialLayout->setSpacing(2);
             ui.axisFramesLayout->addWidget(serialWidget, 0, Qt::AlignLeft);
 
             connect(serialButton, &QPushButton::toggled, this,
@@ -1249,7 +1248,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
             serialLayouts.insert(serialKey, serialLayout);
         }
 
-        serialLayouts.value(serialKey)->addWidget(frame);
+        serialLayouts.value(serialKey)->addWidget(frame, 0, Qt::AlignLeft | Qt::AlignTop);
 
         m_axisUi[id] = axisUi;
 
