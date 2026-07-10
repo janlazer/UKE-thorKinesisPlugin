@@ -19,21 +19,25 @@
 #include "ThorlabsPositionManagerDialog.h"
 #include "ui_stageFrame.h"
 
+#include <QAbstractSpinBox>
 #include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QFrame>
 #include <QGridLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QLocale>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSize>
+#include <QSizePolicy>
 #include <QTimer>
 #include <QToolButton>
 #include <QWidget>
@@ -52,6 +56,13 @@ namespace
     constexpr int kPositionRefreshIntervalMs = 1000;
     constexpr int kStageFrameWidth = 680;
     constexpr int kSerialButtonHeight = 24;
+    constexpr int kPanicButtonWidth = 120;
+    constexpr int kTopBarSpacing = 2;
+    constexpr int kTopActionButtonWidth =
+        (kStageFrameWidth - kPanicButtonWidth - 3 * kTopBarSpacing) / 3;
+    constexpr int kDetectButtonWidth =
+        kStageFrameWidth - kPanicButtonWidth - kTopActionButtonWidth - 2 * kTopBarSpacing;
+    constexpr int kGroupHeaderSpacing = 4;
 
     int preferredWidgetHeight(QWidget* widget)
     {
@@ -135,7 +146,7 @@ namespace
 
         widget->setStyleSheet(QStringLiteral(
             "QPushButton, QToolButton { min-height: 22px; max-height: 24px; padding-left: 6px; padding-right: 6px; }"
-            "QLineEdit, QComboBox { min-height: 22px; max-height: 24px; }"));
+            "QLineEdit, QComboBox, QDoubleSpinBox { min-height: 22px; max-height: 24px; }"));
     }
 }
 
@@ -217,7 +228,15 @@ thorlabsKinesisPlugin::thorlabsKinesisPlugin()
     ui.setupUi(dock);
     dock->setMinimumWidth(kStageFrameWidth + 8);
     if (dock->widget())
+    {
         dock->widget()->setMinimumWidth(kStageFrameWidth);
+        dock->widget()->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    }
+    ui.verticalLayout->setAlignment(Qt::AlignTop);
+    ui.topBarLayout->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    ui.pushButton_detect->setFixedSize(kDetectButtonWidth, kSerialButtonHeight);
+    ui.pushButton_positionManager->setFixedSize(kTopActionButtonWidth, kSerialButtonHeight);
+    ui.pushButton_stop->setFixedSize(kPanicButtonWidth, kSerialButtonHeight);
     ui.stageFrameContainer->setMinimumWidth(kStageFrameWidth);
     dock->setWindowTitle(getName());
 
@@ -800,21 +819,10 @@ void thorlabsKinesisPlugin::syncLegacyMotionInputsFromAxisUi(int id)
 
     const AxisUi& axisUi = m_axisUi[id];
     if (axisUi.positionEdit)
-    {
-        double posMm = 0.0;
-        if (parseFiniteDouble(axisUi.positionEdit->text(), posMm))
-            ui.lineEdit_position->setText(QString::number(posMm * 1000.0, 'f', 3));
-        else
-            ui.lineEdit_position->setText(axisUi.positionEdit->text());
-    }
+        ui.lineEdit_position->setText(QString::number(axisUi.positionEdit->value() * 1000.0, 'f', 3));
+
     if (axisUi.stepEdit)
-    {
-        double stepMm = 0.0;
-        if (parseFiniteDouble(axisUi.stepEdit->text(), stepMm))
-            ui.lineEdit_step->setText(QString::number(stepMm * 1000.0, 'f', 3));
-        else
-            ui.lineEdit_step->setText(axisUi.stepEdit->text());
-    }
+        ui.lineEdit_step->setText(QString::number(axisUi.stepEdit->value() * 1000.0, 'f', 3));
 }
 
 void thorlabsKinesisPlugin::syncLegacyTriggerInputsFromAxisUi(int id)
@@ -1112,8 +1120,35 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
             ? ax.display
             : QString("%1 %2").arg(ax.isM30xy ? QStringLiteral("M30XY") : QStringLiteral("KVS30"), ax.axisName));
         frame->setToolTip(QStringLiteral("Serial: %1").arg(ax.baseSerial));
-        axisUi.positionEdit->setText(QStringLiteral("0,000"));
-        axisUi.stepEdit->setText(ax.isM30xy ? QStringLiteral("0,100") : QStringLiteral("0,010"));
+
+        const QLocale guiLocale(QLocale::German, QLocale::Germany);
+        axisUi.positionEdit->setLocale(guiLocale);
+        axisUi.stepEdit->setLocale(guiLocale);
+        axisUi.positionEdit->setDecimals(3);
+        axisUi.stepEdit->setDecimals(3);
+        axisUi.positionEdit->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        axisUi.stepEdit->setButtonSymbols(QAbstractSpinBox::UpDownArrows);
+        axisUi.positionEdit->setKeyboardTracking(false);
+        axisUi.stepEdit->setKeyboardTracking(false);
+
+        double minUm = 0.0;
+        double maxUm = 0.0;
+        if (axisTravelLimitsUm(ax, minUm, maxUm) && maxUm > minUm)
+        {
+            axisUi.positionEdit->setRange(minUm / 1000.0, maxUm / 1000.0);
+            axisUi.stepEdit->setRange(0.001, (maxUm - minUm) / 1000.0);
+        }
+        else
+        {
+            axisUi.positionEdit->setRange(-1000000.0, 1000000.0);
+            axisUi.stepEdit->setRange(0.001, 1000000.0);
+        }
+
+        axisUi.positionEdit->setSingleStep(0.100);
+        axisUi.stepEdit->setSingleStep(ax.isM30xy ? 0.100 : 0.010);
+        axisUi.positionEdit->setValue(0.0);
+        axisUi.stepEdit->setValue(ax.isM30xy ? 0.100 : 0.010);
+
         axisUi.triggerStartEdit->setText(QStringLiteral("0,000"));
         axisUi.triggerIntervalEdit->setText(QStringLiteral("0,100"));
         axisUi.triggerCountEdit->setText(QStringLiteral("1"));
@@ -1158,11 +1193,28 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         {
             const QString serialTitle = QString("%1 %2")
                 .arg(ax.isM30xy ? QStringLiteral("M30XY") : QStringLiteral("KVS30"), serialKey);
+            auto* headerWidget = new QWidget(ui.stageFrameContainer);
+            headerWidget->setFixedSize(kStageFrameWidth, kSerialButtonHeight);
+            auto* headerLayout = new QGridLayout(headerWidget);
+            headerLayout->setContentsMargins(0, 0, 0, 0);
+            headerLayout->setHorizontalSpacing(kGroupHeaderSpacing);
+            headerLayout->setVerticalSpacing(0);
+
             auto* serialButton = new QPushButton(serialTitle + QStringLiteral(" >>>"),
-                ui.stageFrameContainer);
+                headerWidget);
             serialButton->setCheckable(true);
-            serialButton->setFixedSize(kStageFrameWidth, kSerialButtonHeight);
-            ui.axisFramesLayout->addWidget(serialButton, 0, Qt::AlignLeft);
+            serialButton->setFixedSize(
+                kStageFrameWidth - kPanicButtonWidth - kGroupHeaderSpacing,
+                kSerialButtonHeight);
+            headerLayout->addWidget(serialButton, 0, 0);
+
+            auto* serialPanicButton = new QPushButton(QStringLiteral("Panic Stop"),
+                headerWidget);
+            serialPanicButton->setFixedSize(kPanicButtonWidth, kSerialButtonHeight);
+            serialPanicButton->setStyleSheet("background-color: red; color: black;");
+            headerLayout->addWidget(serialPanicButton, 0, 1);
+
+            ui.axisFramesLayout->addWidget(headerWidget, 0, Qt::AlignLeft);
 
             auto* serialWidget = new QWidget(ui.stageFrameContainer);
             serialWidget->setFixedWidth(kStageFrameWidth);
@@ -1178,6 +1230,21 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
                         ? QStringLiteral(" <<<")
                         : QStringLiteral(" >>>")));
                     updateAxisFrameAreaHeight();
+                });
+            connect(serialPanicButton, &QPushButton::clicked, this,
+                [this, serialKey]() {
+                    for (int axisIndex = 0; axisIndex < m_axes.size(); ++axisIndex)
+                    {
+                        const AxisEntry& groupAxis = m_axes[axisIndex];
+                        const QString groupKey = groupAxis.baseSerial.isEmpty()
+                            ? axisKey(groupAxis)
+                            : groupAxis.baseSerial;
+                        if (groupKey == serialKey)
+                        {
+                            stopAxisIndex(axisIndex);
+                            refreshAxisStatusUi(axisIndex);
+                        }
+                    }
                 });
             serialLayouts.insert(serialKey, serialLayout);
         }
@@ -1199,8 +1266,6 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
             stopAxisIndex(id);
             refreshAxisStatusUi(id);
         });
-        connect(axisUi.positionEdit, &QLineEdit::returnPressed,
-            axisUi.moveButton, &QPushButton::click);
         connect(axisUi.stepDownButton, &QPushButton::clicked, this, [this, id]() {
             selectAxis(id);
             syncLegacyMotionInputsFromAxisUi(id);

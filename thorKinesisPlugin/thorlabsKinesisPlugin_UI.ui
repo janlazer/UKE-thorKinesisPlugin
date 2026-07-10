@@ -16,7 +16,7 @@
   <widget class="QWidget" name="dockWidgetContents">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">
-     <number>4</number>
+     <number>2</number>
     </property>
     <property name="leftMargin">
      <number>4</number>

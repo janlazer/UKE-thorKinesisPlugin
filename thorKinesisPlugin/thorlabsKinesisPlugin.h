@@ -43,6 +43,7 @@
 class QFrame;
 class QLabel;
 class QLCDNumber;
+class QDoubleSpinBox;
 class QLineEdit;
 class QPushButton;
 class QTimer;
@@ -150,8 +151,8 @@ private:
         QLabel* title = nullptr;
         QLabel* statusLabel = nullptr;
         QLCDNumber* positionLcd = nullptr;
-        QLineEdit* positionEdit = nullptr;
-        QLineEdit* stepEdit = nullptr;
+        QDoubleSpinBox* positionEdit = nullptr;
+        QDoubleSpinBox* stepEdit = nullptr;
         QLineEdit* triggerStartEdit = nullptr;
         QLineEdit* triggerIntervalEdit = nullptr;
         QLineEdit* triggerCountEdit = nullptr;
