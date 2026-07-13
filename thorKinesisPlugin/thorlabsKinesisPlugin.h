@@ -60,6 +60,7 @@ class thorlabsKinesisPlugin : public IScanStage
         Q_INTERFACES(IHardware)
 
 public:
+    using IStageMultiAxis::moveTo;
     using IStageMultiAxis::moveSteps;
 
     thorlabsKinesisPlugin();
@@ -90,16 +91,6 @@ public:
     virtual bool moveTo(double pos, int id = 0) override;
     virtual bool moveTo(double* pos, const char* axes) override;
     virtual bool moveTo(const double* positions, const int* axes, int axisCount) override;
-
-    // Convenience wrapper for compile-time C arrays. Axis codes are bit-style
-    // identifiers: 1 = X, 2 = Y, 4 = Z. The shared array size is deduced by
-    // the compiler, so the caller does not pass a separate count.
-    template<std::size_t N>
-    bool moveTo(const double (&positions)[N], const int (&axes)[N])
-    {
-        static_assert(N > 0, "At least one axis is required");
-        return moveToAxisCodes(positions, axes, N);
-    }
 
     virtual bool moveSteps(double steps, int id = 0) override;
     bool moveSteps(double* steps, const char* axes);   // Zusatzfunktion fuer mehrere relative Achsen
