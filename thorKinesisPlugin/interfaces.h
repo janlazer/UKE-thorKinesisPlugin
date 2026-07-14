@@ -35,6 +35,14 @@
 #undef min
 #endif
 
+#ifdef _MSC_VER
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
+#include <math.h>
+#pragma warning(push)
+#pragma warning(disable: 4005)
+#endif
 #include <QTextEdit>
 #include <QDialog>
 #include <QDateTime>
@@ -45,6 +53,9 @@
 #include <cstdint>
 #include <vector>
 #include "qwt_plot_curve.h"
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 class QDockWidget;
 
 //! Scan job value types
