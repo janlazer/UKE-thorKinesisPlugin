@@ -1224,6 +1224,77 @@ bool BDCStage::setMaxVelocityMmS(unsigned channel, double maxVelocityMmS, short*
     return true;
 }
 
+bool BDCStage::configureContinuousJog(unsigned channel, double maxVelocityMmS, short* errOut)
+{
+    if (!validateReady(channel, errOut))
+        return false;
+
+    const int idx = channelIndex(channel);
+    const double velocityFactor = factor_velocity_mm[idx];
+    if (!std::isfinite(maxVelocityMmS)
+        || maxVelocityMmS <= 0.0
+        || maxVelocityMmS > kBdcM30MotorMaxVelocityMmS + 1e-9
+        || !std::isfinite(velocityFactor)
+        || velocityFactor <= 0.0)
+    {
+        qDebug() << "BDCStage::configureContinuousJog invalid velocity serial=" << m_serialCStr
+            << "ch=" << channel
+            << "velocityMmS=" << maxVelocityMmS
+            << "maxAllowedMmS=" << kBdcM30MotorMaxVelocityMmS
+            << "factor=" << velocityFactor;
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    int acceleration = 0;
+    int previousMaxVelocity = 0;
+    short err = BDC_GetJogVelParams(
+        m_serialCStr, static_cast<short>(channel), &acceleration, &previousMaxVelocity);
+    if (err != 0 || acceleration <= 0)
+        acceleration = kBdcM30JogAccelerationDeviceUnits;
+
+    const double velocityDeviceValue = maxVelocityMmS / velocityFactor;
+    if (!std::isfinite(velocityDeviceValue)
+        || velocityDeviceValue <= 0.0
+        || velocityDeviceValue > static_cast<double>((std::numeric_limits<int>::max)()))
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    const int maxVelocityDevice = static_cast<int>(std::lround(velocityDeviceValue));
+    if (maxVelocityDevice <= 0)
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    err = BDC_SetJogMode(
+        m_serialCStr, static_cast<short>(channel), MOT_Continuous, MOT_Profiled);
+    if (!okOrLog("BDC_SetJogMode", m_serial, err, channel, errOut))
+        return false;
+
+    err = BDC_SetJogVelParams(
+        m_serialCStr, static_cast<short>(channel), acceleration, maxVelocityDevice);
+    if (!okOrLog("BDC_SetJogVelParams", m_serial, err, channel, errOut))
+        return false;
+
+    if (errOut) *errOut = 0;
+    return true;
+}
+
+bool BDCStage::moveJog(unsigned channel, bool forwards, short* errOut)
+{
+    if (!validateReady(channel, errOut))
+        return false;
+
+    const MOT_TravelDirection direction = forwards
+        ? static_cast<MOT_TravelDirection>(MOT_Forwards)
+        : static_cast<MOT_TravelDirection>(MOT_Reverse);
+    const short err = BDC_MoveJog(m_serialCStr, static_cast<short>(channel), direction);
+    return okOrLog("BDC_MoveJog", m_serial, err, channel, errOut);
+}
+
 double BDCStage::deviceToMm(int32_t deviceUnits, unsigned channel) const
 {
     const int idx = channelIndex(channel);
@@ -1498,6 +1569,64 @@ bool BDCStage::disableTrigger(unsigned channel, bool force, short* errOut)
     m_trig.enabled = m_triggerEnabled[0] || m_triggerEnabled[1];
     if (errOut) *errOut = 0;
     return true;
+}
+
+bool BDCStage::configureTriggerOutputGpo(unsigned channel, unsigned outputPort, short* errOut)
+{
+    if (!validateReady(channel, errOut))
+        return false;
+    if (outputPort < 1 || outputPort > 2)
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    const KMOT_TriggerPortMode trigger1Mode =
+        outputPort == 1 ? KMOT_TrigOut_GPO : KMOT_TrigDisabled;
+    const KMOT_TriggerPortMode trigger2Mode =
+        outputPort == 2 ? KMOT_TrigOut_GPO : KMOT_TrigDisabled;
+
+    const short err = BDC_SetTriggerConfigParams(
+        m_serialCStr,
+        static_cast<short>(channel),
+        trigger1Mode,
+        KMOT_TrigPolarityHigh,
+        trigger2Mode,
+        KMOT_TrigPolarityHigh);
+    if (!okOrLog("BDC_SetTriggerConfigParams(GPO)", m_serial, err, channel, errOut))
+        return false;
+
+    const int idx = channelIndex(channel);
+    m_triggerEnabled[idx] = true;
+    m_trig.enabled = true;
+    if (outputPort == 1)
+        m_trig.trigger1Mode = static_cast<int>(KMOT_TrigOut_GPO);
+    else
+        m_trig.trigger2Mode = static_cast<int>(KMOT_TrigOut_GPO);
+
+    if (errOut) *errOut = 0;
+    return true;
+}
+
+bool BDCStage::setDigitalOutput(unsigned channel, unsigned outputPort, bool high, short* errOut)
+{
+    if (!validateReady(channel, errOut))
+        return false;
+    if (outputPort < 1 || outputPort > 2)
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    const byte mask = static_cast<byte>(1u << (outputPort - 1));
+    byte outputs = BDC_GetDigitalOutputs(m_serialCStr, static_cast<short>(channel));
+    outputs = high
+        ? static_cast<byte>(outputs | mask)
+        : static_cast<byte>(outputs & static_cast<byte>(~mask));
+
+    const short err = BDC_SetDigitalOutputs(
+        m_serialCStr, static_cast<short>(channel), outputs);
+    return okOrLog("BDC_SetDigitalOutputs", m_serial, err, channel, errOut);
 }
 
 // --------- Robust wait using status polling ---------

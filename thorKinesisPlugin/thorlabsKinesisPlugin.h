@@ -18,6 +18,7 @@
 #include "KinesisDetect.h"
 #include "BDCStage.h"
 #include "KVSStage.h"
+#include "WindowsGamepadInput.h"
 
 #include <QDockWidget>
 #include <QMap>
@@ -35,6 +36,7 @@
 #include <mutex>
 #include <atomic>
 #include <cstddef>
+#include <chrono>
 
 #ifdef _MSC_VER
 #pragma warning(pop)
@@ -167,6 +169,43 @@ private:
         QVector<double> positionsUm;
     };
 
+    struct GamepadDirectionBinding
+    {
+        int globalAxisId = 0;
+        int sign = 1;
+    };
+
+    struct GamepadConfig
+    {
+        bool enabled = false;
+        QString deviceKey;
+        double axisLeftXCenter = 0.0;
+        double axisLeftYCenter = 0.0;
+        double deadzone = 0.25;
+        double baseJogVelocityMmS = 0.5;
+        double fastMultiplier = 3.0;
+        double slowMultiplier = 0.25;
+        int triggerButton = 0;
+        int slowButton = 1;
+        int fastButton = 2;
+        int zDownButton = 4;
+        int zUpButton = 5;
+        std::array<GamepadDirectionBinding, 4> directionBindings;
+        int zAxisGlobalId = 0;
+        bool zSoftLimitsEnabled = true;
+        double zMinUm = 0.0;
+        double zMaxUm = 30000.0;
+        int triggerAxisGlobalId = 0;
+        int triggerOutputPort = 1;
+        int triggerPulseMs = 50;
+    };
+
+    struct GamepadActiveJog
+    {
+        int sign = 0;
+        double velocityMmS = 0.0;
+    };
+
     void initGUI();
     void refreshAxisUi();
     void rebuildAxisFrames();
@@ -217,6 +256,18 @@ private:
     bool readAxisMotionState(int id, bool& moving, bool& homed) const;
     bool stopAxisIndex(int id);
     int findAxisIndexByName(QChar axisName) const;
+    void setupGamepadControls();
+    void refreshGamepadControlBar();
+    void openGamepadConfigDialog();
+    void ensureGamepadDefaults();
+    void updateGamepadDevice();
+    void pollGamepad();
+    void stopGamepadJogs(bool sendStop, bool immediate = false);
+    void clearGamepadJogState();
+    bool startGamepadJogAxis(int axisIndex, int sign, double velocityMmS);
+    void stopGamepadJogAxis(int axisIndex, bool sendStop, bool immediate = false);
+    bool isGamepadZJogAllowed(int axisIndex, int sign, double velocityMmS) const;
+    bool pulseGamepadTrigger();
 
 private:
     Ui::DockWidget ui;
@@ -244,6 +295,14 @@ private:
     std::vector<double> m_lastPositionsUm;
     QThread* m_motionThread = nullptr;
     QTimer* m_positionRefreshTimer = nullptr;
+    QTimer* m_gamepadPollTimer = nullptr;
+    std::unique_ptr<WindowsGamepadInput> m_gamepadInput;
+    GamepadConfig m_gamepadConfig;
+    QMap<int, GamepadActiveJog> m_gamepadActiveJogs;
+    QMap<int, std::chrono::steady_clock::time_point> m_gamepadRestartNotBefore;
+    bool m_gamepadTriggerWasPressed = false;
+    bool m_gamepadSuppressUntilNeutral = false;
+    int m_gamepadReconnectPolls = 0;
     bool m_guiInitialized = false;
     std::atomic_bool m_motionTaskActive{ false };
     std::atomic_bool m_stopRequested{ false };

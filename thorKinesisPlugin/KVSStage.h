@@ -52,6 +52,7 @@ public:
     bool moveTo(int32_t pos, short* errOut = nullptr);
     bool moveRel(int32_t delta, short* errOut = nullptr);
     bool stopImmediate(short* errOut = nullptr);
+    bool stopProfiled(short* errOut = nullptr);
 
     int32_t getPosition(short* errOut = nullptr) const;
     bool isMoving(short* errOut = nullptr) const;
@@ -67,6 +68,8 @@ public:
     double mmPerDeviceUnit() const { return factor_position_mm; }
     double getMaxVelocityMmS(short* errOut = nullptr) const;
     bool setMaxVelocityMmS(double maxVelocityMmS, short* errOut = nullptr);
+    bool configureContinuousJog(double maxVelocityMmS, short* errOut = nullptr);
+    bool moveJog(bool forwards, short* errOut = nullptr);
 
     double deviceToUm(int32_t deviceUnits) const;
     double deviceToMm(int32_t deviceUnits) const;
@@ -80,6 +83,8 @@ public:
 
     bool applyTriggerConfig(short* errOut = nullptr);
     bool disableTrigger(short* errOut = nullptr);
+    bool configureTriggerOutputGpo(unsigned outputPort, short* errOut = nullptr);
+    bool setDigitalOutput(unsigned outputPort, bool high, short* errOut = nullptr);
 
     const std::string& serial() const { return m_serial; }
     bool isOpen() const { return m_isOpen; }

@@ -52,6 +52,7 @@ constexpr double kKvs30MinAbsolutePositionUm = 0.0;
 constexpr double kKvs30MaxAbsolutePositionUm = 30000.0;
 constexpr double kKvs30MoveAccelerationMmS2 = 1.0;
 constexpr double kKvs30MoveMaxVelocityMmS = 2.0;
+constexpr double kKvs30JogAccelerationMmS2 = 2.0;
 constexpr int kKvs30MoveAccelerationDeviceUnits = 153;
 constexpr int kKvs30MoveMaxVelocityDeviceUnits = 894771;
 constexpr double kKvs30ExpectedVelocityMmPerDeviceUnit =
@@ -911,12 +912,24 @@ bool KVSStage::stopImmediate(short* errOut)
     if (!validateOpen(errOut))
         return false;
 
+    const short err = KVS_StopImmediate(m_serialCStr);
+    const bool stopped = okOrLog("KVS_StopImmediate", m_serial, err, errOut);
+    if (!stopped)
+        return false;
+
     short triggerErr = 0;
     const bool triggerDisabled = disableTrigger(&triggerErr);
-    short err = KVS_StopImmediate(m_serialCStr);
-    const bool stopped = okOrLog("KVS_StopImmediate", m_serial, err, errOut);
     if (!triggerDisabled && errOut) *errOut = triggerErr;
-    return triggerDisabled && stopped;
+    return triggerDisabled;
+}
+
+bool KVSStage::stopProfiled(short* errOut)
+{
+    if (!validateOpen(errOut))
+        return false;
+
+    const short err = KVS_StopProfiled(m_serialCStr);
+    return okOrLog("KVS_StopProfiled", m_serial, err, errOut);
 }
 
 int32_t KVSStage::getPosition(short* errOut) const
@@ -1051,6 +1064,126 @@ bool KVSStage::setMaxVelocityMmS(double maxVelocityMmS, short* errOut)
 
     if (errOut) *errOut = 0;
     return true;
+}
+
+bool KVSStage::configureContinuousJog(double maxVelocityMmS, short* errOut)
+{
+    if (!validateOpen(errOut))
+        return false;
+
+    if (!std::isfinite(maxVelocityMmS)
+        || maxVelocityMmS <= 0.0
+        || maxVelocityMmS > kKvs30MoveMaxVelocityMmS + 1e-9
+        || !std::isfinite(factor_velocity_mm)
+        || factor_velocity_mm <= 0.0
+        || !std::isfinite(factor_acceleration_mm)
+        || factor_acceleration_mm <= 0.0)
+    {
+        qDebug() << "KVSStage::configureContinuousJog invalid velocity serial=" << m_serialCStr
+            << "velocityMmS=" << maxVelocityMmS
+            << "maxAllowedMmS=" << kKvs30MoveMaxVelocityMmS
+            << "velocityFactor=" << factor_velocity_mm
+            << "accelerationFactor=" << factor_acceleration_mm;
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    const double velocityDeviceValue = maxVelocityMmS / factor_velocity_mm;
+    const double accelerationDeviceValue = kKvs30JogAccelerationMmS2 / factor_acceleration_mm;
+    if (!std::isfinite(velocityDeviceValue)
+        || velocityDeviceValue <= 0.0
+        || velocityDeviceValue > static_cast<double>((std::numeric_limits<int>::max)())
+        || !std::isfinite(accelerationDeviceValue)
+        || accelerationDeviceValue <= 0.0
+        || accelerationDeviceValue > static_cast<double>((std::numeric_limits<int>::max)()))
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    const int maxVelocityDevice = static_cast<int>(std::lround(velocityDeviceValue));
+    const int accelerationDevice = static_cast<int>(std::lround(accelerationDeviceValue));
+    const double expectedVelocityDevice = maxVelocityMmS / kKvs30ExpectedVelocityMmPerDeviceUnit;
+    const double expectedAccelerationDevice =
+        kKvs30JogAccelerationMmS2 / kKvs30ExpectedAccelerationMmPerDeviceUnit;
+    if (maxVelocityDevice <= 0
+        || accelerationDevice <= 0
+        || std::abs(static_cast<double>(maxVelocityDevice) - expectedVelocityDevice)
+            > (std::max)(20.0, expectedVelocityDevice * kKvs30VelocityDeviceRelTolerance)
+        || std::abs(static_cast<double>(accelerationDevice) - expectedAccelerationDevice)
+            > (std::max)(3.0, expectedAccelerationDevice * kKvs30VelocityDeviceRelTolerance))
+    {
+        qDebug() << "KVSStage::configureContinuousJog refusing unsafe device parameters serial="
+            << m_serialCStr
+            << "accelerationDevice=" << accelerationDevice
+            << "expectedAccelerationDevice~=" << expectedAccelerationDevice
+            << "maxVelocityDevice=" << maxVelocityDevice
+            << "expectedVelocityDevice~=" << expectedVelocityDevice;
+        if (errOut) *errOut = kErrInvalidState;
+        return false;
+    }
+
+    short err = KVS_SetJogMode(m_serialCStr, MOT_Continuous, MOT_Profiled);
+    if (!okOrLog("KVS_SetJogMode", m_serial, err, errOut))
+        return false;
+
+    err = KVS_SetJogVelParams(m_serialCStr, accelerationDevice, maxVelocityDevice);
+    if (!okOrLog("KVS_SetJogVelParams", m_serial, err, errOut))
+        return false;
+
+    MOT_JogModes actualMode = MOT_JogModeUndefined;
+    MOT_StopModes actualStopMode = MOT_StopModeUndefined;
+    int actualAcceleration = 0;
+    int actualMaxVelocity = 0;
+    err = KVS_GetJogMode(m_serialCStr, &actualMode, &actualStopMode);
+    if (!okOrLog("KVS_GetJogMode", m_serial, err, errOut))
+        return false;
+    err = KVS_GetJogVelParams(m_serialCStr, &actualAcceleration, &actualMaxVelocity);
+    if (!okOrLog("KVS_GetJogVelParams", m_serial, err, errOut))
+        return false;
+    if (actualMode != MOT_Continuous
+        || actualStopMode != MOT_Profiled
+        || actualAcceleration != accelerationDevice
+        || actualMaxVelocity != maxVelocityDevice)
+    {
+        qDebug() << "KVSStage::configureContinuousJog verification failed serial=" << m_serialCStr
+            << "mode=" << actualMode
+            << "stopMode=" << actualStopMode
+            << "acceleration=" << actualAcceleration
+            << "maxVelocity=" << actualMaxVelocity;
+        if (errOut) *errOut = kErrInvalidState;
+        return false;
+    }
+
+    qDebug() << "KVSStage::configureContinuousJog serial=" << m_serialCStr
+        << "velocityMmS=" << maxVelocityMmS
+        << "accelerationMmS2=" << kKvs30JogAccelerationMmS2
+        << "accelerationDevice=" << accelerationDevice
+        << "maxVelocityDevice=" << maxVelocityDevice;
+
+    if (errOut) *errOut = 0;
+    return true;
+}
+
+bool KVSStage::moveJog(bool forwards, short* errOut)
+{
+    if (!validateOpen(errOut))
+        return false;
+
+    const uint32_t statusBits = static_cast<uint32_t>(KVS_GetStatusBits(m_serialCStr));
+    if ((statusBits & 0x00000400u) == 0)
+    {
+        qDebug() << "KVSStage::moveJog refusing jog because homed bit is not set serial="
+            << m_serialCStr;
+        if (errOut) *errOut = kErrInvalidState;
+        return false;
+    }
+
+    const MOT_TravelDirection direction = forwards
+        ? static_cast<MOT_TravelDirection>(MOT_Forwards)
+        : static_cast<MOT_TravelDirection>(MOT_Reverse);
+    const short err = KVS_MoveJog(m_serialCStr, direction);
+    return okOrLog("KVS_MoveJog", m_serial, err, errOut);
 }
 
 int32_t KVSStage::mmToDevice(double mm, short* errOut) const
@@ -1216,6 +1349,56 @@ bool KVSStage::disableTrigger(short* errOut)
     m_trig.enabled = false;
     if (errOut) *errOut = 0;
     return true;
+}
+
+bool KVSStage::configureTriggerOutputGpo(unsigned outputPort, short* errOut)
+{
+    if (!validateOpen(errOut))
+        return false;
+    if (outputPort < 1 || outputPort > 2)
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    KMOT_TriggerConfig cfg = {};
+    cfg.Trigger1Mode = outputPort == 1 ? KMOT_TrigOut_GPO : KMOT_TrigDisabled;
+    cfg.Trigger1Polarity = KMOT_TrigPolarityHigh;
+    cfg.Trigger2Mode = outputPort == 2 ? KMOT_TrigOut_GPO : KMOT_TrigDisabled;
+    cfg.Trigger2Polarity = KMOT_TrigPolarityHigh;
+
+    const short err = KVS_SetTriggerConfigParamsBlock(m_serialCStr, &cfg);
+    if (!okOrLog("KVS_SetTriggerConfigParamsBlock(GPO)", m_serial, err, errOut))
+        return false;
+
+    m_trig.enabled = true;
+    if (outputPort == 1)
+        m_trig.trigger1Mode = static_cast<int>(KMOT_TrigOut_GPO);
+    else
+        m_trig.trigger2Mode = static_cast<int>(KMOT_TrigOut_GPO);
+
+    if (errOut) *errOut = 0;
+    return true;
+}
+
+bool KVSStage::setDigitalOutput(unsigned outputPort, bool high, short* errOut)
+{
+    if (!validateOpen(errOut))
+        return false;
+    if (outputPort < 1 || outputPort > 2)
+    {
+        if (errOut) *errOut = kErrInvalidArgument;
+        return false;
+    }
+
+    const byte mask = static_cast<byte>(1u << (outputPort - 1));
+    byte outputs = KVS_GetDigitalOutputs(m_serialCStr);
+    outputs = high
+        ? static_cast<byte>(outputs | mask)
+        : static_cast<byte>(outputs & static_cast<byte>(~mask));
+
+    const short err = KVS_SetDigitalOutputs(m_serialCStr, outputs);
+    return okOrLog("KVS_SetDigitalOutputs", m_serial, err, errOut);
 }
 // -------- Robust wait using status polling --------
 

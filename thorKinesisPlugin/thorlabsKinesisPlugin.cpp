@@ -21,11 +21,14 @@
 
 #include <QAbstractSpinBox>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFrame>
 #include <QGridLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -38,6 +41,7 @@
 #include <QSignalBlocker>
 #include <QSize>
 #include <QSizePolicy>
+#include <QSpinBox>
 #include <QTimer>
 #include <QToolButton>
 #include <QWidget>
@@ -63,6 +67,19 @@ namespace
     constexpr int kDetectButtonWidth =
         kStageFrameWidth - kPanicButtonWidth - kTopActionButtonWidth - 2 * kTopBarSpacing;
     constexpr int kGroupHeaderSpacing = 4;
+    constexpr int kGamepadPollIntervalMs = 50;
+    constexpr int kGamepadDirections = 4;
+    constexpr int kGamepadDirectionUp = 0;
+    constexpr int kGamepadDirectionDown = 1;
+    constexpr int kGamepadDirectionLeft = 2;
+    constexpr int kGamepadDirectionRight = 3;
+    constexpr double kGamepadM30MaxJogVelocityMmS = 2.6;
+    constexpr double kGamepadKvsMaxJogVelocityMmS = 2.0;
+    constexpr double kGamepadKvsJogAccelerationMmS2 = 2.0;
+    constexpr double kGamepadKvsStopReactionTimeS = 0.30;
+    constexpr double kGamepadKvsFixedStopMarginMm = 0.05;
+    constexpr int kGamepadProfiledStopStatusDelayMs = 250;
+    constexpr double kGamepadVelocityChangeTolerance = 0.001;
 
     int preferredWidgetHeight(QWidget* widget)
     {
@@ -201,11 +218,42 @@ static QString frequencyDisplayText(double velocityMmS, double spacingMm)
         return QStringLiteral("n/a");
     }
 
-    return guiDecimalText(velocityMmS / spacingMm);
-}
+        return guiDecimalText(velocityMmS / spacingMm);
+    }
 
-static bool looksLikeBaseM30XYSerial(const QString& serial)
-{
+    QString boolSaveText(bool value)
+    {
+        return value ? QStringLiteral("1") : QStringLiteral("0");
+    }
+
+    bool loadBoolValue(const QMap<QString, QString>& map, const QString& key, bool fallback)
+    {
+        const QString value = map.value(key).trimmed().toLower();
+        if (value == QStringLiteral("1") || value == QStringLiteral("true"))
+            return true;
+        if (value == QStringLiteral("0") || value == QStringLiteral("false"))
+            return false;
+        return fallback;
+    }
+
+    int loadIntValue(const QMap<QString, QString>& map, const QString& key, int fallback)
+    {
+        bool ok = false;
+        const int value = map.value(key).toInt(&ok);
+        return ok ? value : fallback;
+    }
+
+    double loadDoubleValue(const QMap<QString, QString>& map, const QString& key, double fallback)
+    {
+        bool ok = false;
+        QString normalized = map.value(key).trimmed();
+        normalized.replace(',', '.');
+        const double value = normalized.toDouble(&ok);
+        return ok && std::isfinite(value) ? value : fallback;
+    }
+
+    static bool looksLikeBaseM30XYSerial(const QString& serial)
+    {
     // Kinesis sometimes shows "base-1" / "base-2" for bay/channel views.
     // We only accept the base serial (no dash) as the BDC base.
     return !serial.contains('-');
@@ -223,6 +271,7 @@ thorlabsKinesisPlugin::thorlabsKinesisPlugin()
     this->setDetected(false);
     this->setInitialized(false);
     this->setOutput(true);
+    m_gamepadInput = std::make_unique<WindowsGamepadInput>();
 
     dock = new QDockWidget();
     ui.setupUi(dock);
@@ -274,11 +323,83 @@ IOutput* thorlabsKinesisPlugin::getOutput()
 QMap<QString, QString> thorlabsKinesisPlugin::getSaveValueInformation()
 {
     QMap<QString, QString> map;
+    map.insert(QStringLiteral("gamepad/enabled"), boolSaveText(m_gamepadConfig.enabled));
+    map.insert(QStringLiteral("gamepad/deviceKey"), m_gamepadConfig.deviceKey);
+    map.insert(QStringLiteral("gamepad/axisLeftXCenter"), QString::number(m_gamepadConfig.axisLeftXCenter, 'g', 12));
+    map.insert(QStringLiteral("gamepad/axisLeftYCenter"), QString::number(m_gamepadConfig.axisLeftYCenter, 'g', 12));
+    map.insert(QStringLiteral("gamepad/deadzone"), QString::number(m_gamepadConfig.deadzone, 'g', 12));
+    map.insert(QStringLiteral("gamepad/baseJogVelocityMmS"), QString::number(m_gamepadConfig.baseJogVelocityMmS, 'g', 12));
+    map.insert(QStringLiteral("gamepad/fastMultiplier"), QString::number(m_gamepadConfig.fastMultiplier, 'g', 12));
+    map.insert(QStringLiteral("gamepad/slowMultiplier"), QString::number(m_gamepadConfig.slowMultiplier, 'g', 12));
+    map.insert(QStringLiteral("gamepad/triggerButton"), QString::number(m_gamepadConfig.triggerButton));
+    map.insert(QStringLiteral("gamepad/slowButton"), QString::number(m_gamepadConfig.slowButton));
+    map.insert(QStringLiteral("gamepad/fastButton"), QString::number(m_gamepadConfig.fastButton));
+    map.insert(QStringLiteral("gamepad/zDownButton"), QString::number(m_gamepadConfig.zDownButton));
+    map.insert(QStringLiteral("gamepad/zUpButton"), QString::number(m_gamepadConfig.zUpButton));
+    for (int direction = 0; direction < kGamepadDirections; ++direction)
+    {
+        const QString prefix = QStringLiteral("gamepad/direction%1/").arg(direction);
+        map.insert(prefix + QStringLiteral("axis"), QString::number(m_gamepadConfig.directionBindings[direction].globalAxisId));
+        map.insert(prefix + QStringLiteral("sign"), QString::number(m_gamepadConfig.directionBindings[direction].sign));
+    }
+    map.insert(QStringLiteral("gamepad/zAxis"), QString::number(m_gamepadConfig.zAxisGlobalId));
+    map.insert(QStringLiteral("gamepad/zSoftLimitsEnabled"), boolSaveText(m_gamepadConfig.zSoftLimitsEnabled));
+    map.insert(QStringLiteral("gamepad/zMinUm"), QString::number(m_gamepadConfig.zMinUm, 'g', 12));
+    map.insert(QStringLiteral("gamepad/zMaxUm"), QString::number(m_gamepadConfig.zMaxUm, 'g', 12));
+    map.insert(QStringLiteral("gamepad/triggerAxis"), QString::number(m_gamepadConfig.triggerAxisGlobalId));
+    map.insert(QStringLiteral("gamepad/triggerOutputPort"), QString::number(m_gamepadConfig.triggerOutputPort));
+    map.insert(QStringLiteral("gamepad/triggerPulseMs"), QString::number(m_gamepadConfig.triggerPulseMs));
     return map;
 }
 
-void thorlabsKinesisPlugin::setLoadValueInformation(QMap<QString, QString> /*map*/)
+void thorlabsKinesisPlugin::setLoadValueInformation(QMap<QString, QString> map)
 {
+    m_gamepadConfig.enabled = loadBoolValue(map, QStringLiteral("gamepad/enabled"), m_gamepadConfig.enabled);
+    m_gamepadConfig.deviceKey = map.value(QStringLiteral("gamepad/deviceKey"), m_gamepadConfig.deviceKey);
+    m_gamepadConfig.axisLeftXCenter = loadDoubleValue(map, QStringLiteral("gamepad/axisLeftXCenter"), m_gamepadConfig.axisLeftXCenter);
+    m_gamepadConfig.axisLeftYCenter = loadDoubleValue(map, QStringLiteral("gamepad/axisLeftYCenter"), m_gamepadConfig.axisLeftYCenter);
+    m_gamepadConfig.deadzone = loadDoubleValue(map, QStringLiteral("gamepad/deadzone"), m_gamepadConfig.deadzone);
+    m_gamepadConfig.baseJogVelocityMmS = loadDoubleValue(map, QStringLiteral("gamepad/baseJogVelocityMmS"), m_gamepadConfig.baseJogVelocityMmS);
+    m_gamepadConfig.fastMultiplier = loadDoubleValue(map, QStringLiteral("gamepad/fastMultiplier"), m_gamepadConfig.fastMultiplier);
+    m_gamepadConfig.slowMultiplier = loadDoubleValue(map, QStringLiteral("gamepad/slowMultiplier"), m_gamepadConfig.slowMultiplier);
+    m_gamepadConfig.triggerButton = qBound(0,
+        loadIntValue(map, QStringLiteral("gamepad/triggerButton"), m_gamepadConfig.triggerButton),
+        WindowsGamepadInput::ButtonCount - 1);
+    m_gamepadConfig.slowButton = qBound(0,
+        loadIntValue(map, QStringLiteral("gamepad/slowButton"), m_gamepadConfig.slowButton),
+        WindowsGamepadInput::ButtonCount - 1);
+    m_gamepadConfig.fastButton = qBound(0,
+        loadIntValue(map, QStringLiteral("gamepad/fastButton"), m_gamepadConfig.fastButton),
+        WindowsGamepadInput::ButtonCount - 1);
+    m_gamepadConfig.zDownButton = qBound(0,
+        loadIntValue(map, QStringLiteral("gamepad/zDownButton"), m_gamepadConfig.zDownButton),
+        WindowsGamepadInput::ButtonCount - 1);
+    m_gamepadConfig.zUpButton = qBound(0,
+        loadIntValue(map, QStringLiteral("gamepad/zUpButton"), m_gamepadConfig.zUpButton),
+        WindowsGamepadInput::ButtonCount - 1);
+    for (int direction = 0; direction < kGamepadDirections; ++direction)
+    {
+        const QString prefix = QStringLiteral("gamepad/direction%1/").arg(direction);
+        m_gamepadConfig.directionBindings[direction].globalAxisId =
+            loadIntValue(map, prefix + QStringLiteral("axis"), m_gamepadConfig.directionBindings[direction].globalAxisId);
+        m_gamepadConfig.directionBindings[direction].sign =
+            loadIntValue(map, prefix + QStringLiteral("sign"), m_gamepadConfig.directionBindings[direction].sign);
+    }
+    m_gamepadConfig.zAxisGlobalId = loadIntValue(map, QStringLiteral("gamepad/zAxis"), m_gamepadConfig.zAxisGlobalId);
+    m_gamepadConfig.zSoftLimitsEnabled =
+        loadBoolValue(map, QStringLiteral("gamepad/zSoftLimitsEnabled"), m_gamepadConfig.zSoftLimitsEnabled);
+    m_gamepadConfig.zMinUm = loadDoubleValue(map, QStringLiteral("gamepad/zMinUm"), m_gamepadConfig.zMinUm);
+    m_gamepadConfig.zMaxUm = loadDoubleValue(map, QStringLiteral("gamepad/zMaxUm"), m_gamepadConfig.zMaxUm);
+    m_gamepadConfig.triggerAxisGlobalId =
+        loadIntValue(map, QStringLiteral("gamepad/triggerAxis"), m_gamepadConfig.triggerAxisGlobalId);
+    m_gamepadConfig.triggerOutputPort =
+        qBound(1, loadIntValue(map, QStringLiteral("gamepad/triggerOutputPort"), m_gamepadConfig.triggerOutputPort), 2);
+    m_gamepadConfig.triggerPulseMs =
+        qBound(5, loadIntValue(map, QStringLiteral("gamepad/triggerPulseMs"), m_gamepadConfig.triggerPulseMs), 1000);
+
+    if (m_gamepadConfig.zMaxUm < m_gamepadConfig.zMinUm)
+        std::swap(m_gamepadConfig.zMinUm, m_gamepadConfig.zMaxUm);
+    updateGamepadDevice();
 }
 
 void thorlabsKinesisPlugin::showSettingsWindow()
@@ -339,7 +460,9 @@ void thorlabsKinesisPlugin::setAxisControlsBusy(int id, bool busy)
 
 void thorlabsKinesisPlugin::setMotionUiBusy(bool busy)
 {
-    const bool anyBusy = busy || m_motionTaskActive.load() || !m_axisMotionThreads.isEmpty();
+    const bool anyBusy = busy || m_motionTaskActive.load()
+        || !m_axisMotionThreads.isEmpty()
+        || !m_gamepadActiveJogs.isEmpty();
 
     ui.pushButton_detect->setEnabled(!anyBusy);
     ui.comboBox_devices->setEnabled(!anyBusy);
@@ -351,6 +474,7 @@ void thorlabsKinesisPlugin::setMotionUiBusy(bool busy)
     ui.pushButton_disableTrigger->setEnabled(!anyBusy);
     ui.pushButton_stop->setEnabled(anyBusy || isInitialized());
     ui.pushButton_positionManager->setEnabled(!anyBusy && isInitialized());
+    ui.pushButton_gamepadSettings->setEnabled(!anyBusy);
 
     for (int id = 0; id < m_axisUi.size(); ++id)
         setAxisControlsBusy(id, busy || isAxisUiBusy(id));
@@ -666,6 +790,481 @@ bool thorlabsKinesisPlugin::axisTravelLimitsUm(const AxisEntry& axis, double& mi
     return true;
 }
 
+void thorlabsKinesisPlugin::ensureGamepadDefaults()
+{
+    auto defaultAxisId = [this](QChar axisName) -> int {
+        const int axisIndex = findAxisIndexByName(axisName);
+        return axisIndex >= 0 ? m_axes[axisIndex].globalAxisId : 0;
+    };
+
+    const int xAxisId = defaultAxisId(QChar('x'));
+    const int yAxisId = defaultAxisId(QChar('y'));
+    const int zAxisId = defaultAxisId(QChar('z'));
+
+    auto ensureBinding = [&](int direction, int axisId, int sign) {
+        GamepadDirectionBinding& binding = m_gamepadConfig.directionBindings[direction];
+        if (binding.globalAxisId <= 0 || axisIndexFromGlobalId(binding.globalAxisId) < 0)
+            binding.globalAxisId = axisId;
+        binding.sign = binding.sign < 0 ? -1 : 1;
+        if (axisId > 0 && binding.globalAxisId == axisId)
+            binding.sign = sign;
+    };
+
+    ensureBinding(kGamepadDirectionUp, yAxisId, +1);
+    ensureBinding(kGamepadDirectionDown, yAxisId, -1);
+    ensureBinding(kGamepadDirectionLeft, xAxisId, -1);
+    ensureBinding(kGamepadDirectionRight, xAxisId, +1);
+
+    if (m_gamepadConfig.zAxisGlobalId <= 0
+        || axisIndexFromGlobalId(m_gamepadConfig.zAxisGlobalId) < 0)
+    {
+        m_gamepadConfig.zAxisGlobalId = zAxisId;
+    }
+
+    if (m_gamepadConfig.triggerAxisGlobalId <= 0
+        || axisIndexFromGlobalId(m_gamepadConfig.triggerAxisGlobalId) < 0)
+    {
+        m_gamepadConfig.triggerAxisGlobalId = zAxisId > 0
+            ? zAxisId
+            : (m_axes.isEmpty() ? 0 : m_axes.front().globalAxisId);
+    }
+
+    m_gamepadConfig.deadzone = qBound(0.05, m_gamepadConfig.deadzone, 0.90);
+    m_gamepadConfig.baseJogVelocityMmS =
+        qBound(0.01, m_gamepadConfig.baseJogVelocityMmS, kGamepadKvsMaxJogVelocityMmS);
+    m_gamepadConfig.fastMultiplier = qBound(1.0, m_gamepadConfig.fastMultiplier, 10.0);
+    m_gamepadConfig.slowMultiplier = qBound(0.05, m_gamepadConfig.slowMultiplier, 1.0);
+    m_gamepadConfig.triggerOutputPort = qBound(1, m_gamepadConfig.triggerOutputPort, 2);
+    m_gamepadConfig.triggerPulseMs = qBound(5, m_gamepadConfig.triggerPulseMs, 1000);
+
+    if (m_gamepadConfig.zMaxUm < m_gamepadConfig.zMinUm)
+        std::swap(m_gamepadConfig.zMinUm, m_gamepadConfig.zMaxUm);
+}
+
+void thorlabsKinesisPlugin::updateGamepadDevice()
+{
+    if (!m_gamepadInput)
+        m_gamepadInput = std::make_unique<WindowsGamepadInput>();
+
+    const quintptr windowHandle = dock && dock->window()
+        ? static_cast<quintptr>(dock->window()->winId())
+        : 0;
+    const QVector<WindowsGamepadInput::DeviceInfo> devices =
+        m_gamepadInput->refreshDevices(windowHandle);
+
+    if (m_gamepadConfig.deviceKey.isEmpty() && !devices.isEmpty())
+        m_gamepadConfig.deviceKey = devices.front().key;
+
+    const auto selected = std::find_if(devices.cbegin(), devices.cend(),
+        [this](const WindowsGamepadInput::DeviceInfo& device) {
+            return device.key == m_gamepadConfig.deviceKey;
+        });
+    if (selected == devices.cend())
+    {
+        stopGamepadJogs(true, true);
+        m_gamepadInput->clearSelection();
+        m_gamepadSuppressUntilNeutral = true;
+        refreshGamepadControlBar();
+        return;
+    }
+
+    if (m_gamepadInput->selectedDeviceKey() != selected->key)
+    {
+        m_gamepadInput->selectDevice(selected->key, windowHandle);
+        m_gamepadTriggerWasPressed = false;
+        m_gamepadSuppressUntilNeutral = true;
+    }
+
+    m_gamepadReconnectPolls = 0;
+    refreshGamepadControlBar();
+}
+
+void thorlabsKinesisPlugin::clearGamepadJogState()
+{
+    m_gamepadActiveJogs.clear();
+    m_gamepadRestartNotBefore.clear();
+    m_gamepadTriggerWasPressed = false;
+    m_gamepadSuppressUntilNeutral = false;
+}
+
+bool thorlabsKinesisPlugin::isGamepadZJogAllowed(
+    int axisIndex, int sign, double velocityMmS) const
+{
+    if (axisIndex < 0 || axisIndex >= m_axes.size())
+        return false;
+    if (sign == 0)
+        return true;
+
+    const AxisEntry& axis = m_axes[axisIndex];
+    const bool configuredZAxis =
+        axis.globalAxisId == m_gamepadConfig.zAxisGlobalId;
+    const bool enforceConfiguredLimits =
+        configuredZAxis && m_gamepadConfig.zSoftLimitsEnabled;
+    if (axis.isM30xy && !enforceConfiguredLimits)
+        return true;
+
+    double minUm = 0.0;
+    double maxUm = 0.0;
+    if (!axisTravelLimitsUm(axis, minUm, maxUm))
+        return false;
+    if (enforceConfiguredLimits)
+    {
+        minUm = (std::max)(minUm, m_gamepadConfig.zMinUm);
+        maxUm = (std::min)(maxUm, m_gamepadConfig.zMaxUm);
+    }
+
+    double posUm = 0.0;
+    if (!readAxisPositionUm(axisIndex, posUm) || !std::isfinite(posUm))
+        return false;
+
+    double stopMarginUm = 1.0;
+    if (!axis.isM30xy)
+    {
+        const double clampedVelocityMmS =
+            qBound(0.01, velocityMmS, kGamepadKvsMaxJogVelocityMmS);
+        const double brakingDistanceMm =
+            (clampedVelocityMmS * clampedVelocityMmS)
+            / (2.0 * kGamepadKvsJogAccelerationMmS2);
+        stopMarginUm = 1000.0 * (brakingDistanceMm
+            + clampedVelocityMmS * kGamepadKvsStopReactionTimeS
+            + kGamepadKvsFixedStopMarginMm);
+    }
+
+    if (maxUm - minUm <= 2.0 * stopMarginUm)
+        return false;
+    if (sign > 0)
+        return posUm < maxUm - stopMarginUm;
+    if (sign < 0)
+        return posUm > minUm + stopMarginUm;
+    return true;
+}
+
+bool thorlabsKinesisPlugin::startGamepadJogAxis(int axisIndex, int sign, double velocityMmS)
+{
+    if (!isInitialized()
+        || axisIndex < 0
+        || axisIndex >= m_axes.size()
+        || sign == 0
+        || m_motionTaskActive.load()
+        || !m_axisMotionThreads.isEmpty())
+    {
+        return false;
+    }
+
+    AxisEntry& axis = m_axes[axisIndex];
+    const double maxVelocityMmS = axis.isM30xy
+        ? kGamepadM30MaxJogVelocityMmS
+        : kGamepadKvsMaxJogVelocityMmS;
+    const double clampedVelocityMmS = qBound(0.01, velocityMmS, maxVelocityMmS);
+
+    const auto restartIt = m_gamepadRestartNotBefore.constFind(axisIndex);
+    if (restartIt != m_gamepadRestartNotBefore.cend()
+        && std::chrono::steady_clock::now() < restartIt.value())
+    {
+        return false;
+    }
+
+    bool moving = false;
+    bool homed = false;
+    if (!readAxisMotionState(axisIndex, moving, homed) || moving || !homed)
+        return false;
+    m_gamepadRestartNotBefore.remove(axisIndex);
+    if (!isGamepadZJogAllowed(axisIndex, sign, clampedVelocityMmS))
+        return false;
+
+    short err = 0;
+    bool ok = false;
+    if (axis.isM30xy)
+    {
+        BDCStage* stage = m30xyForBase(axis.baseSerial);
+        ok = stage
+            && stage->isOpen()
+            && disableAllTriggers()
+            && stage->configureContinuousJog(static_cast<unsigned>(axis.channel), clampedVelocityMmS, &err)
+            && stage->moveJog(static_cast<unsigned>(axis.channel), sign > 0, &err);
+    }
+    else
+    {
+        KVSStage* stage = kvsForSerial(axis.baseSerial);
+        ok = stage
+            && stage->isOpen()
+            && disableAllTriggers()
+            && stage->configureContinuousJog(clampedVelocityMmS, &err)
+            && stage->moveJog(sign > 0, &err);
+    }
+
+    if (!ok)
+        return false;
+
+    m_gamepadActiveJogs[axisIndex] = { sign, clampedVelocityMmS };
+    m_busyAxisIndices.insert(axisIndex);
+    refreshAxisStatusUi(axisIndex);
+    setAxisControlsBusy(axisIndex, true);
+    setMotionUiBusy(false);
+    return true;
+}
+
+void thorlabsKinesisPlugin::stopGamepadJogAxis(
+    int axisIndex, bool sendStop, bool immediate)
+{
+    if (!m_gamepadActiveJogs.contains(axisIndex))
+        return;
+
+    if (sendStop)
+    {
+        bool stopped = false;
+        bool profiledStop = false;
+        if (!immediate && axisIndex >= 0 && axisIndex < m_axes.size()
+            && !m_axes[axisIndex].isM30xy)
+        {
+            KVSStage* stage = kvsForSerial(m_axes[axisIndex].baseSerial);
+            short err = 0;
+            stopped = stage && stage->isOpen() && stage->stopProfiled(&err);
+            profiledStop = stopped;
+        }
+        if (!stopped)
+            stopAxisIndex(axisIndex);
+
+        if (profiledStop)
+        {
+            m_gamepadRestartNotBefore[axisIndex] = std::chrono::steady_clock::now()
+                + std::chrono::milliseconds(kGamepadProfiledStopStatusDelayMs);
+        }
+        else
+        {
+            m_gamepadRestartNotBefore.remove(axisIndex);
+        }
+    }
+    else
+    {
+        m_gamepadRestartNotBefore.remove(axisIndex);
+    }
+
+    m_gamepadActiveJogs.remove(axisIndex);
+    m_busyAxisIndices.remove(axisIndex);
+    refreshAxisPositionUi(axisIndex);
+    setAxisControlsBusy(axisIndex, false);
+    setMotionUiBusy(false);
+}
+
+void thorlabsKinesisPlugin::stopGamepadJogs(bool sendStop, bool immediate)
+{
+    const QList<int> activeAxes = m_gamepadActiveJogs.keys();
+    for (int axisIndex : activeAxes)
+        stopGamepadJogAxis(axisIndex, sendStop, immediate);
+}
+
+bool thorlabsKinesisPlugin::pulseGamepadTrigger()
+{
+    if (!isInitialized())
+        return false;
+
+    const int axisIndex = axisIndexFromGlobalId(m_gamepadConfig.triggerAxisGlobalId);
+    if (axisIndex < 0 || axisIndex >= m_axes.size())
+        return false;
+
+    const unsigned outputPort = static_cast<unsigned>(m_gamepadConfig.triggerOutputPort);
+    const AxisEntry axis = m_axes[axisIndex];
+    short err = 0;
+    bool ok = false;
+
+    if (axis.isM30xy)
+    {
+        BDCStage* stage = m30xyForBase(axis.baseSerial);
+        ok = stage
+            && stage->isOpen()
+            && stage->configureTriggerOutputGpo(static_cast<unsigned>(axis.channel), outputPort, &err)
+            && stage->setDigitalOutput(static_cast<unsigned>(axis.channel), outputPort, true, &err);
+    }
+    else
+    {
+        KVSStage* stage = kvsForSerial(axis.baseSerial);
+        ok = stage
+            && stage->isOpen()
+            && stage->configureTriggerOutputGpo(outputPort, &err)
+            && stage->setDigitalOutput(outputPort, true, &err);
+    }
+
+    if (!ok)
+        return false;
+
+    QTimer::singleShot(m_gamepadConfig.triggerPulseMs, this, [this, axisIndex, outputPort]() {
+        if (axisIndex < 0 || axisIndex >= m_axes.size())
+            return;
+        const AxisEntry axis = m_axes[axisIndex];
+        short err = 0;
+        if (axis.isM30xy)
+        {
+            if (BDCStage* stage = m30xyForBase(axis.baseSerial))
+            {
+                if (stage->isOpen())
+                    stage->setDigitalOutput(static_cast<unsigned>(axis.channel), outputPort, false, &err);
+            }
+        }
+        else
+        {
+            if (KVSStage* stage = kvsForSerial(axis.baseSerial))
+            {
+                if (stage->isOpen())
+                    stage->setDigitalOutput(outputPort, false, &err);
+            }
+        }
+    });
+
+    return true;
+}
+
+void thorlabsKinesisPlugin::pollGamepad()
+{
+    if (!m_gamepadConfig.enabled)
+    {
+        stopGamepadJogs(true, true);
+        return;
+    }
+
+    if (!m_gamepadInput)
+        updateGamepadDevice();
+
+    WindowsGamepadInput::State input;
+    if (!m_gamepadInput || !m_gamepadInput->poll(input) || !input.connected)
+    {
+        stopGamepadJogs(true, true);
+        m_gamepadSuppressUntilNeutral = true;
+        if (++m_gamepadReconnectPolls >= 20)
+        {
+            m_gamepadReconnectPolls = 0;
+            updateGamepadDevice();
+        }
+        return;
+    }
+    m_gamepadReconnectPolls = 0;
+    if (!isInitialized())
+    {
+        stopGamepadJogs(true, true);
+        return;
+    }
+
+    const bool motionBusy = m_motionTaskActive.load() || !m_axisMotionThreads.isEmpty();
+    if (motionBusy)
+    {
+        stopGamepadJogs(true, true);
+        m_gamepadSuppressUntilNeutral = true;
+        return;
+    }
+
+    const auto buttonPressed = [&input](int index) {
+        return index >= 0
+            && index < WindowsGamepadInput::ButtonCount
+            && input.buttons[static_cast<size_t>(index)];
+    };
+
+    const double axisX = input.axisX - m_gamepadConfig.axisLeftXCenter;
+    const double axisY = input.axisY - m_gamepadConfig.axisLeftYCenter;
+    bool up = input.up;
+    bool down = input.down;
+    bool left = input.left;
+    bool right = input.right;
+
+    if (!up && !down && !left && !right)
+    {
+        const double absX = std::abs(axisX);
+        const double absY = std::abs(axisY);
+        if (absX > m_gamepadConfig.deadzone || absY > m_gamepadConfig.deadzone)
+        {
+            if (absX >= absY)
+            {
+                right = axisX > 0.0;
+                left = axisX < 0.0;
+            }
+            else
+            {
+                down = axisY > 0.0;
+                up = axisY < 0.0;
+            }
+        }
+    }
+
+    const bool zDown = buttonPressed(m_gamepadConfig.zDownButton);
+    const bool zUp = buttonPressed(m_gamepadConfig.zUpButton);
+    const bool triggerPressed = buttonPressed(m_gamepadConfig.triggerButton);
+    const bool slowPressed = buttonPressed(m_gamepadConfig.slowButton);
+    const bool fastPressed = buttonPressed(m_gamepadConfig.fastButton);
+    const bool anyMappedInput = up || down || left || right || zDown || zUp
+        || triggerPressed || slowPressed || fastPressed;
+    if (m_gamepadSuppressUntilNeutral)
+    {
+        if (!anyMappedInput)
+            m_gamepadSuppressUntilNeutral = false;
+        else
+            return;
+    }
+
+    if (triggerPressed && !m_gamepadTriggerWasPressed)
+        pulseGamepadTrigger();
+    m_gamepadTriggerWasPressed = triggerPressed;
+
+    double velocityMmS = m_gamepadConfig.baseJogVelocityMmS;
+    if (fastPressed && !slowPressed)
+        velocityMmS *= m_gamepadConfig.fastMultiplier;
+    else if (slowPressed && !fastPressed)
+        velocityMmS *= m_gamepadConfig.slowMultiplier;
+
+    QMap<int, int> desiredSigns;
+    const auto addDirection = [&](int direction) {
+        const GamepadDirectionBinding& binding = m_gamepadConfig.directionBindings[direction];
+        const int axisIndex = axisIndexFromGlobalId(binding.globalAxisId);
+        if (axisIndex < 0)
+            return;
+        const int sign = binding.sign < 0 ? -1 : 1;
+        if (desiredSigns.contains(axisIndex) && desiredSigns.value(axisIndex) != sign)
+            desiredSigns[axisIndex] = 0;
+        else
+            desiredSigns[axisIndex] = sign;
+    };
+
+    if (up) addDirection(kGamepadDirectionUp);
+    if (down) addDirection(kGamepadDirectionDown);
+    if (left) addDirection(kGamepadDirectionLeft);
+    if (right) addDirection(kGamepadDirectionRight);
+
+    const int zAxisIndex = axisIndexFromGlobalId(m_gamepadConfig.zAxisGlobalId);
+    if (zAxisIndex >= 0 && zDown != zUp)
+        desiredSigns[zAxisIndex] = zUp ? +1 : -1;
+    else if (zAxisIndex >= 0 && zDown && zUp)
+        desiredSigns[zAxisIndex] = 0;
+
+    const QList<int> activeAxes = m_gamepadActiveJogs.keys();
+    for (int axisIndex : activeAxes)
+    {
+        const int desiredSign = desiredSigns.value(axisIndex, 0);
+        const GamepadActiveJog activeJog = m_gamepadActiveJogs.value(axisIndex);
+        if (desiredSign == 0
+            || !isGamepadZJogAllowed(axisIndex, desiredSign, activeJog.velocityMmS))
+            stopGamepadJogAxis(axisIndex, true);
+    }
+
+    for (auto it = desiredSigns.cbegin(); it != desiredSigns.cend(); ++it)
+    {
+        const int axisIndex = it.key();
+        const int desiredSign = it.value();
+        if (desiredSign == 0
+            || !isGamepadZJogAllowed(axisIndex, desiredSign, velocityMmS))
+            continue;
+
+        const GamepadActiveJog activeJog = m_gamepadActiveJogs.value(axisIndex);
+        if (m_gamepadActiveJogs.contains(axisIndex)
+            && activeJog.sign == desiredSign
+            && std::abs(activeJog.velocityMmS - velocityMmS) <= kGamepadVelocityChangeTolerance)
+        {
+            continue;
+        }
+
+        if (m_gamepadActiveJogs.contains(axisIndex))
+            stopGamepadJogAxis(axisIndex, true);
+        startGamepadJogAxis(axisIndex, desiredSign, velocityMmS);
+    }
+}
+
 bool thorlabsKinesisPlugin::chooseAxesForInitialization()
 {
     if (m_detectedAxes.isEmpty())
@@ -731,6 +1330,7 @@ bool thorlabsKinesisPlugin::chooseAxesForInitialization()
     assignGlobalAxisIds(selectedAxes);
     m_selectedAxisKeys = selectedKeys;
     m_axes = selectedAxes;
+    ensureGamepadDefaults();
     refreshAxisCombo();
     rebuildAxisFrames();
     ui.comboBox_devices->setCurrentIndex(0);
@@ -1065,6 +1665,431 @@ void thorlabsKinesisPlugin::setupAxisTriggerMenu(AxisUi& axisUi, QWidget* parent
     axisUi.triggerMenuButton->setPopupMode(QToolButton::InstantPopup);
 }
 
+void thorlabsKinesisPlugin::setupGamepadControls()
+{
+    if (!ui.checkBox_gamepadEnabled
+        || !ui.lineEdit_gamepadStatus
+        || !ui.pushButton_gamepadSettings)
+    {
+        return;
+    }
+
+    ui.gamepadControlLayout->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    ui.checkBox_gamepadEnabled->setFixedHeight(kSerialButtonHeight);
+    ui.pushButton_gamepadSettings->setFixedHeight(kSerialButtonHeight);
+
+    connect(ui.pushButton_gamepadSettings, &QPushButton::clicked,
+        this, &thorlabsKinesisPlugin::openGamepadConfigDialog, Qt::UniqueConnection);
+    connect(ui.checkBox_gamepadEnabled, &QCheckBox::toggled,
+        this, [this](bool enabled) {
+            if (m_gamepadConfig.enabled == enabled)
+                return;
+
+            if (!enabled)
+                stopGamepadJogs(true);
+            m_gamepadConfig.enabled = enabled;
+            m_gamepadSuppressUntilNeutral = enabled;
+            updateGamepadDevice();
+            refreshGamepadControlBar();
+        });
+
+    refreshGamepadControlBar();
+}
+
+void thorlabsKinesisPlugin::refreshGamepadControlBar()
+{
+    if (!ui.checkBox_gamepadEnabled
+        || !ui.lineEdit_gamepadStatus
+        || !ui.pushButton_gamepadSettings)
+    {
+        return;
+    }
+
+    {
+        QSignalBlocker blocker(ui.checkBox_gamepadEnabled);
+        ui.checkBox_gamepadEnabled->setChecked(m_gamepadConfig.enabled);
+    }
+
+    QString status = QStringLiteral("No gamepad connected");
+    if (m_gamepadInput && !m_gamepadInput->selectedDeviceName().isEmpty())
+    {
+        status = m_gamepadInput->selectedDeviceName();
+    }
+    else if (!m_gamepadConfig.deviceKey.isEmpty())
+    {
+        status = QStringLiteral("Configured gamepad not connected");
+    }
+    ui.lineEdit_gamepadStatus->setText(status);
+    ui.lineEdit_gamepadStatus->setEnabled(m_gamepadConfig.enabled);
+}
+
+void thorlabsKinesisPlugin::openGamepadConfigDialog()
+{
+    ensureGamepadDefaults();
+    updateGamepadDevice();
+    const bool restartPollTimer = m_gamepadPollTimer && m_gamepadPollTimer->isActive();
+    if (m_gamepadPollTimer)
+        m_gamepadPollTimer->stop();
+    stopGamepadJogs(true);
+
+    QDialog dialog(dock);
+    dialog.setWindowTitle(QStringLiteral("Gamepad Configuration"));
+    dialog.setModal(true);
+    dialog.setMinimumWidth(520);
+    applyQMotionLikeWidgetStyle(&dialog);
+
+    GamepadConfig editedConfig = m_gamepadConfig;
+    double calibratedCenterX = editedConfig.axisLeftXCenter;
+    double calibratedCenterY = editedConfig.axisLeftYCenter;
+
+    auto* rootLayout = new QVBoxLayout(&dialog);
+    rootLayout->setContentsMargins(8, 8, 8, 8);
+    rootLayout->setSpacing(8);
+
+    auto* enableCheck = new QCheckBox(QStringLiteral("Enable gamepad"), &dialog);
+    enableCheck->setChecked(editedConfig.enabled);
+    rootLayout->addWidget(enableCheck);
+
+    auto* deviceGroup = new QGroupBox(QStringLiteral("Device"), &dialog);
+    auto* deviceLayout = new QGridLayout(deviceGroup);
+    deviceLayout->setContentsMargins(8, 8, 8, 8);
+    deviceLayout->setHorizontalSpacing(6);
+    deviceLayout->setVerticalSpacing(4);
+    auto* deviceCombo = new QComboBox(deviceGroup);
+    auto* deviceStateLabel = new QLabel(deviceGroup);
+    auto* neutralLabel = new QLabel(deviceGroup);
+    auto* calibrateButton = new QPushButton(QStringLiteral("Calibrate Neutral"), deviceGroup);
+    auto* refreshDevicesButton = new QPushButton(QStringLiteral("Refresh Devices"), deviceGroup);
+    deviceLayout->addWidget(new QLabel(QStringLiteral("Gamepad:"), deviceGroup), 0, 0);
+    deviceLayout->addWidget(deviceCombo, 0, 1, 1, 3);
+    deviceLayout->addWidget(deviceStateLabel, 1, 0, 1, 4);
+    deviceLayout->addWidget(neutralLabel, 2, 0, 1, 4);
+    deviceLayout->addWidget(calibrateButton, 3, 0, 1, 2);
+    deviceLayout->addWidget(refreshDevicesButton, 3, 2, 1, 2);
+    rootLayout->addWidget(deviceGroup);
+
+    WindowsGamepadInput previewInput;
+    WindowsGamepadInput::State previewState;
+    const quintptr previewWindowHandle = static_cast<quintptr>(dialog.winId());
+
+    auto populateDeviceCombo = [&]() {
+        const QString previousKey = deviceCombo->currentData().toString().isEmpty()
+            ? editedConfig.deviceKey
+            : deviceCombo->currentData().toString();
+        const QVector<WindowsGamepadInput::DeviceInfo> devices =
+            previewInput.refreshDevices(previewWindowHandle);
+
+        QSignalBlocker blocker(deviceCombo);
+        deviceCombo->clear();
+        for (const WindowsGamepadInput::DeviceInfo& device : devices)
+            deviceCombo->addItem(device.name, device.key);
+        if (devices.isEmpty())
+            deviceCombo->addItem(QStringLiteral("No gamepad connected"), QString());
+
+        const int requestedIndex = deviceCombo->findData(previousKey);
+        deviceCombo->setCurrentIndex(requestedIndex >= 0 ? requestedIndex : 0);
+        const QString selectedKey = deviceCombo->currentData().toString();
+        if (selectedKey.isEmpty())
+            previewInput.clearSelection();
+        else
+            previewInput.selectDevice(selectedKey, previewWindowHandle);
+    };
+
+    auto updateNeutralLabel = [&]() {
+        neutralLabel->setText(QStringLiteral("Neutral: X %1 / Y %2")
+            .arg(guiDecimalText(calibratedCenterX, 3))
+            .arg(guiDecimalText(calibratedCenterY, 3)));
+    };
+    auto updateDeviceState = [&]() {
+        if (deviceCombo->currentData().toString().isEmpty()
+            || !previewInput.poll(previewState)
+            || !previewState.connected)
+        {
+            deviceStateLabel->setText(QStringLiteral("No input from selected gamepad."));
+            return;
+        }
+
+        QStringList pressedButtons;
+        for (int index = 0; index < WindowsGamepadInput::ButtonCount; ++index)
+        {
+            if (previewState.buttons[static_cast<size_t>(index)])
+                pressedButtons.append(QString::number(index + 1));
+        }
+        deviceStateLabel->setText(QStringLiteral("Input: LX %1 / LY %2  Buttons: %3")
+            .arg(guiDecimalText(previewState.axisX, 3))
+            .arg(guiDecimalText(previewState.axisY, 3))
+            .arg(pressedButtons.isEmpty() ? QStringLiteral("-") : pressedButtons.join(QStringLiteral(", "))));
+    };
+    populateDeviceCombo();
+    updateNeutralLabel();
+    updateDeviceState();
+
+    auto* inputTimer = new QTimer(&dialog);
+    inputTimer->setInterval(200);
+    connect(inputTimer, &QTimer::timeout, &dialog, updateDeviceState);
+    inputTimer->start();
+
+    connect(deviceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+        &dialog, [&](int) {
+            const QString selectedKey = deviceCombo->currentData().toString();
+            if (selectedKey.isEmpty())
+                previewInput.clearSelection();
+            else
+                previewInput.selectDevice(selectedKey, previewWindowHandle);
+            updateDeviceState();
+        });
+    connect(calibrateButton, &QPushButton::clicked, &dialog, [&]() {
+        if (!previewInput.poll(previewState) || !previewState.connected)
+        {
+            QMessageBox::warning(&dialog, "Thorlabs", "No connected gamepad is selected.");
+            return;
+        }
+        calibratedCenterX = previewState.axisX;
+        calibratedCenterY = previewState.axisY;
+        updateNeutralLabel();
+    });
+    connect(refreshDevicesButton, &QPushButton::clicked,
+        &dialog, [&]() { populateDeviceCombo(); updateDeviceState(); });
+
+    auto* speedGroup = new QGroupBox(QStringLiteral("Speed"), &dialog);
+    auto* speedLayout = new QGridLayout(speedGroup);
+    speedLayout->setContentsMargins(8, 8, 8, 8);
+    speedLayout->setHorizontalSpacing(6);
+    speedLayout->setVerticalSpacing(4);
+    auto* deadzoneSpin = new QDoubleSpinBox(speedGroup);
+    auto* baseVelocitySpin = new QDoubleSpinBox(speedGroup);
+    auto* fastMultiplierSpin = new QDoubleSpinBox(speedGroup);
+    auto* slowMultiplierSpin = new QDoubleSpinBox(speedGroup);
+    for (QDoubleSpinBox* spin : { deadzoneSpin, baseVelocitySpin, fastMultiplierSpin, slowMultiplierSpin })
+    {
+        spin->setLocale(QLocale(QLocale::German, QLocale::Germany));
+        spin->setDecimals(3);
+    }
+    deadzoneSpin->setRange(0.050, 0.900);
+    deadzoneSpin->setSingleStep(0.050);
+    deadzoneSpin->setValue(editedConfig.deadzone);
+    baseVelocitySpin->setRange(0.010, kGamepadKvsMaxJogVelocityMmS);
+    baseVelocitySpin->setSingleStep(0.100);
+    baseVelocitySpin->setSuffix(QStringLiteral(" mm/s"));
+    baseVelocitySpin->setValue(editedConfig.baseJogVelocityMmS);
+    fastMultiplierSpin->setRange(1.000, 10.000);
+    fastMultiplierSpin->setSingleStep(0.250);
+    fastMultiplierSpin->setValue(editedConfig.fastMultiplier);
+    slowMultiplierSpin->setRange(0.050, 1.000);
+    slowMultiplierSpin->setSingleStep(0.050);
+    slowMultiplierSpin->setValue(editedConfig.slowMultiplier);
+    speedLayout->addWidget(new QLabel(QStringLiteral("Deadzone:"), speedGroup), 0, 0);
+    speedLayout->addWidget(deadzoneSpin, 0, 1);
+    speedLayout->addWidget(new QLabel(QStringLiteral("Base jog:"), speedGroup), 0, 2);
+    speedLayout->addWidget(baseVelocitySpin, 0, 3);
+    speedLayout->addWidget(new QLabel(QStringLiteral("Fast multiplier:"), speedGroup), 1, 0);
+    speedLayout->addWidget(fastMultiplierSpin, 1, 1);
+    speedLayout->addWidget(new QLabel(QStringLiteral("Slow multiplier:"), speedGroup), 1, 2);
+    speedLayout->addWidget(slowMultiplierSpin, 1, 3);
+    rootLayout->addWidget(speedGroup);
+
+    const auto setComboByData = [](QComboBox* combo, int data) {
+        const int index = combo ? combo->findData(data) : -1;
+        if (index >= 0)
+            combo->setCurrentIndex(index);
+    };
+    const auto fillAxisCombo = [this, &setComboByData](QComboBox* combo, int selectedGlobalId, bool m30Only) {
+        combo->addItem(QStringLiteral("None"), 0);
+        for (const AxisEntry& axis : m_axes)
+        {
+            if (m30Only && !axis.isM30xy)
+                continue;
+            combo->addItem(axisDisplayText(axis), axis.globalAxisId);
+        }
+        setComboByData(combo, selectedGlobalId);
+    };
+    const auto makeSignCombo = [&](QWidget* parent, int sign) {
+        auto* combo = new QComboBox(parent);
+        combo->addItem(QStringLiteral("+"), +1);
+        combo->addItem(QStringLiteral("-"), -1);
+        setComboByData(combo, sign < 0 ? -1 : +1);
+        return combo;
+    };
+    const auto makeButtonCombo = [&](QWidget* parent, int selectedButton) {
+        auto* combo = new QComboBox(parent);
+        for (int index = 0; index < WindowsGamepadInput::ButtonCount; ++index)
+            combo->addItem(QStringLiteral("Button %1").arg(index + 1), index);
+        setComboByData(combo, selectedButton);
+        return combo;
+    };
+
+    auto* buttonGroup = new QGroupBox(QStringLiteral("Button Mapping"), &dialog);
+    auto* buttonLayout = new QGridLayout(buttonGroup);
+    buttonLayout->setContentsMargins(8, 8, 8, 8);
+    buttonLayout->setHorizontalSpacing(6);
+    buttonLayout->setVerticalSpacing(4);
+    auto* triggerButtonCombo = makeButtonCombo(buttonGroup, editedConfig.triggerButton);
+    auto* slowButtonCombo = makeButtonCombo(buttonGroup, editedConfig.slowButton);
+    auto* fastButtonCombo = makeButtonCombo(buttonGroup, editedConfig.fastButton);
+    auto* zDownButtonCombo = makeButtonCombo(buttonGroup, editedConfig.zDownButton);
+    auto* zUpButtonCombo = makeButtonCombo(buttonGroup, editedConfig.zUpButton);
+    buttonLayout->addWidget(new QLabel(QStringLiteral("Trigger (A):"), buttonGroup), 0, 0);
+    buttonLayout->addWidget(triggerButtonCombo, 0, 1);
+    buttonLayout->addWidget(new QLabel(QStringLiteral("Slower (B):"), buttonGroup), 0, 2);
+    buttonLayout->addWidget(slowButtonCombo, 0, 3);
+    buttonLayout->addWidget(new QLabel(QStringLiteral("Faster (X):"), buttonGroup), 1, 0);
+    buttonLayout->addWidget(fastButtonCombo, 1, 1);
+    buttonLayout->addWidget(new QLabel(QStringLiteral("Z down (L1):"), buttonGroup), 1, 2);
+    buttonLayout->addWidget(zDownButtonCombo, 1, 3);
+    buttonLayout->addWidget(new QLabel(QStringLiteral("Z up (R1):"), buttonGroup), 2, 0);
+    buttonLayout->addWidget(zUpButtonCombo, 2, 1);
+    rootLayout->addWidget(buttonGroup);
+
+    auto* directionGroup = new QGroupBox(QStringLiteral("XY Directions"), &dialog);
+    auto* directionLayout = new QGridLayout(directionGroup);
+    directionLayout->setContentsMargins(8, 8, 8, 8);
+    directionLayout->setHorizontalSpacing(6);
+    directionLayout->setVerticalSpacing(4);
+    struct DirectionControls
+    {
+        QComboBox* axis = nullptr;
+        QComboBox* sign = nullptr;
+    };
+    std::array<DirectionControls, kGamepadDirections> directionControls;
+    const QStringList directionNames = {
+        QStringLiteral("Up"),
+        QStringLiteral("Down"),
+        QStringLiteral("Left"),
+        QStringLiteral("Right")
+    };
+    for (int direction = 0; direction < kGamepadDirections; ++direction)
+    {
+        directionControls[direction].axis = new QComboBox(directionGroup);
+        directionControls[direction].sign = makeSignCombo(
+            directionGroup, editedConfig.directionBindings[direction].sign);
+        fillAxisCombo(directionControls[direction].axis,
+            editedConfig.directionBindings[direction].globalAxisId,
+            true);
+        directionLayout->addWidget(new QLabel(directionNames[direction] + QStringLiteral(":"), directionGroup), direction, 0);
+        directionLayout->addWidget(directionControls[direction].axis, direction, 1);
+        directionLayout->addWidget(directionControls[direction].sign, direction, 2);
+    }
+    rootLayout->addWidget(directionGroup);
+
+    auto* zGroup = new QGroupBox(QStringLiteral("Z Jog"), &dialog);
+    auto* zLayout = new QGridLayout(zGroup);
+    zLayout->setContentsMargins(8, 8, 8, 8);
+    zLayout->setHorizontalSpacing(6);
+    zLayout->setVerticalSpacing(4);
+    auto* zAxisCombo = new QComboBox(zGroup);
+    fillAxisCombo(zAxisCombo, editedConfig.zAxisGlobalId, false);
+    auto* zSoftLimitCheck = new QCheckBox(QStringLiteral("Softlimits active"), zGroup);
+    zSoftLimitCheck->setChecked(editedConfig.zSoftLimitsEnabled);
+    auto* zMinSpin = new QDoubleSpinBox(zGroup);
+    auto* zMaxSpin = new QDoubleSpinBox(zGroup);
+    for (QDoubleSpinBox* spin : { zMinSpin, zMaxSpin })
+    {
+        spin->setLocale(QLocale(QLocale::German, QLocale::Germany));
+        spin->setDecimals(3);
+        spin->setRange(-1000.000, 1000.000);
+        spin->setSingleStep(0.100);
+        spin->setSuffix(QStringLiteral(" mm"));
+    }
+    zMinSpin->setValue(editedConfig.zMinUm / 1000.0);
+    zMaxSpin->setValue(editedConfig.zMaxUm / 1000.0);
+    zLayout->addWidget(new QLabel(QStringLiteral("Axis:"), zGroup), 0, 0);
+    zLayout->addWidget(zAxisCombo, 0, 1, 1, 3);
+    zLayout->addWidget(zSoftLimitCheck, 1, 0, 1, 2);
+    zLayout->addWidget(new QLabel(QStringLiteral("z_min:"), zGroup), 2, 0);
+    zLayout->addWidget(zMinSpin, 2, 1);
+    zLayout->addWidget(new QLabel(QStringLiteral("z_max:"), zGroup), 2, 2);
+    zLayout->addWidget(zMaxSpin, 2, 3);
+    rootLayout->addWidget(zGroup);
+
+    auto* triggerGroup = new QGroupBox(QStringLiteral("Trigger Output"), &dialog);
+    auto* triggerLayout = new QGridLayout(triggerGroup);
+    triggerLayout->setContentsMargins(8, 8, 8, 8);
+    triggerLayout->setHorizontalSpacing(6);
+    triggerLayout->setVerticalSpacing(4);
+    auto* triggerAxisCombo = new QComboBox(triggerGroup);
+    fillAxisCombo(triggerAxisCombo, editedConfig.triggerAxisGlobalId, false);
+    auto* triggerPortCombo = new QComboBox(triggerGroup);
+    triggerPortCombo->addItem(QStringLiteral("I/O 1"), 1);
+    triggerPortCombo->addItem(QStringLiteral("I/O 2"), 2);
+    setComboByData(triggerPortCombo, editedConfig.triggerOutputPort);
+    auto* triggerPulseSpin = new QSpinBox(triggerGroup);
+    triggerPulseSpin->setRange(5, 1000);
+    triggerPulseSpin->setSingleStep(5);
+    triggerPulseSpin->setSuffix(QStringLiteral(" ms"));
+    triggerPulseSpin->setValue(editedConfig.triggerPulseMs);
+    triggerLayout->addWidget(new QLabel(QStringLiteral("Axis:"), triggerGroup), 0, 0);
+    triggerLayout->addWidget(triggerAxisCombo, 0, 1, 1, 3);
+    triggerLayout->addWidget(new QLabel(QStringLiteral("Output:"), triggerGroup), 1, 0);
+    triggerLayout->addWidget(triggerPortCombo, 1, 1);
+    triggerLayout->addWidget(new QLabel(QStringLiteral("Pulse:"), triggerGroup), 1, 2);
+    triggerLayout->addWidget(triggerPulseSpin, 1, 3);
+    rootLayout->addWidget(triggerGroup);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    rootLayout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
+        GamepadConfig newConfig = editedConfig;
+        newConfig.enabled = enableCheck->isChecked();
+        newConfig.deviceKey = deviceCombo->currentData().toString();
+        newConfig.axisLeftXCenter = calibratedCenterX;
+        newConfig.axisLeftYCenter = calibratedCenterY;
+        newConfig.deadzone = deadzoneSpin->value();
+        newConfig.baseJogVelocityMmS = baseVelocitySpin->value();
+        newConfig.fastMultiplier = fastMultiplierSpin->value();
+        newConfig.slowMultiplier = slowMultiplierSpin->value();
+        newConfig.triggerButton = triggerButtonCombo->currentData().toInt();
+        newConfig.slowButton = slowButtonCombo->currentData().toInt();
+        newConfig.fastButton = fastButtonCombo->currentData().toInt();
+        newConfig.zDownButton = zDownButtonCombo->currentData().toInt();
+        newConfig.zUpButton = zUpButtonCombo->currentData().toInt();
+        for (int direction = 0; direction < kGamepadDirections; ++direction)
+        {
+            newConfig.directionBindings[direction].globalAxisId =
+                directionControls[direction].axis->currentData().toInt();
+            newConfig.directionBindings[direction].sign =
+                directionControls[direction].sign->currentData().toInt() < 0 ? -1 : +1;
+        }
+        newConfig.zAxisGlobalId = zAxisCombo->currentData().toInt();
+        newConfig.zSoftLimitsEnabled = zSoftLimitCheck->isChecked();
+        newConfig.zMinUm = zMinSpin->value() * 1000.0;
+        newConfig.zMaxUm = zMaxSpin->value() * 1000.0;
+        newConfig.triggerAxisGlobalId = triggerAxisCombo->currentData().toInt();
+        newConfig.triggerOutputPort = triggerPortCombo->currentData().toInt();
+        newConfig.triggerPulseMs = triggerPulseSpin->value();
+
+        if (newConfig.zSoftLimitsEnabled && newConfig.zMinUm >= newConfig.zMaxUm)
+        {
+            QMessageBox::warning(&dialog, "Thorlabs", "z_min must be smaller than z_max.");
+            return;
+        }
+        const QSet<int> mappedButtons = {
+            newConfig.triggerButton,
+            newConfig.slowButton,
+            newConfig.fastButton,
+            newConfig.zDownButton,
+            newConfig.zUpButton
+        };
+        if (mappedButtons.size() != 5)
+        {
+            QMessageBox::warning(&dialog, "Thorlabs", "Each gamepad function must use a different button.");
+            return;
+        }
+
+        stopGamepadJogs(true);
+        m_gamepadConfig = newConfig;
+        ensureGamepadDefaults();
+        updateGamepadDevice();
+        refreshGamepadControlBar();
+        dialog.accept();
+    });
+
+    dialog.exec();
+    m_gamepadSuppressUntilNeutral = true;
+    if (restartPollTimer && m_gamepadPollTimer)
+        m_gamepadPollTimer->start();
+}
+
 void thorlabsKinesisPlugin::refreshAllAxisPositionsUi()
 {
     if (!dock || !isInitialized())
@@ -1241,9 +2266,11 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
                         if (groupKey == serialKey)
                         {
                             stopAxisIndex(axisIndex);
+                            stopGamepadJogAxis(axisIndex, false);
                             refreshAxisStatusUi(axisIndex);
                         }
                     }
+                    m_gamepadSuppressUntilNeutral = true;
                 });
             serialLayouts.insert(serialKey, serialLayout);
         }
@@ -1263,6 +2290,8 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         });
         connect(axisUi.stopButton, &QPushButton::clicked, this, [this, id]() {
             stopAxisIndex(id);
+            stopGamepadJogAxis(id, false);
+            m_gamepadSuppressUntilNeutral = true;
             refreshAxisStatusUi(id);
         });
         connect(axisUi.stepDownButton, &QPushButton::clicked, this, [this, id]() {
@@ -1375,12 +2404,14 @@ bool thorlabsKinesisPlugin::detect()
     // A refresh starts from a clean hardware state. Otherwise unplugged or
     // no-longer-detected controllers would remain open in the maps.
     waitForMotionToFinish();
+    stopGamepadJogs(true, true);
     disableAllTriggers();
     closeDevices();
     setInitialized(false);
 
     m_detectedAxes.clear();
     m_axes.clear();
+    clearGamepadJogState();
     refreshAxisCombo();
 
     const auto devices = detectKinesisDevices();
@@ -1521,6 +2552,11 @@ bool thorlabsKinesisPlugin::initialize()
         closeDevices();
 
     setInitialized(okAll);
+    if (okAll)
+    {
+        ensureGamepadDefaults();
+        updateGamepadDevice();
+    }
     setMotionUiBusy(false);
     refreshAllAxisPositionsUi();
 
@@ -1534,10 +2570,12 @@ bool thorlabsKinesisPlugin::release()
     qDebug() << qPrintable(className + "::" + methodName) << "- start";
 
     waitForMotionToFinish();
+    stopGamepadJogs(true, true);
     disableAllTriggers();
     closeDevices();
     m_detectedAxes.clear();
     m_axes.clear();
+    clearGamepadJogState();
     m_activePositionConfigIndex = -1;
     if (dock)
     {
@@ -2446,6 +3484,7 @@ void thorlabsKinesisPlugin::initGUI()
 
     connect(ui.pushButton_positionManager, &QPushButton::clicked,
         this, &thorlabsKinesisPlugin::slot_openPositionManager, Qt::UniqueConnection);
+    setupGamepadControls();
 
     connect(ui.pushButton_applyTrigger, &QPushButton::clicked,
         this, &thorlabsKinesisPlugin::slot_applyTrigger, Qt::UniqueConnection);
@@ -2470,6 +3509,15 @@ void thorlabsKinesisPlugin::initGUI()
     connect(m_positionRefreshTimer, &QTimer::timeout,
         this, &thorlabsKinesisPlugin::refreshAllAxisPositionsUi, Qt::UniqueConnection);
     m_positionRefreshTimer->start();
+
+    m_gamepadPollTimer = new QTimer(this);
+    m_gamepadPollTimer->setInterval(kGamepadPollIntervalMs);
+    m_gamepadPollTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_gamepadPollTimer, &QTimer::timeout,
+        this, &thorlabsKinesisPlugin::pollGamepad, Qt::UniqueConnection);
+    m_gamepadPollTimer->start();
+
+    updateGamepadDevice();
 
     qDebug() << className << "::initGUI - signals connected";
 }
@@ -2554,6 +3602,8 @@ void thorlabsKinesisPlugin::slot_stopMotor()
     qDebug() << className << "::slot_stopMotor";
     if (!stop())
         QMessageBox::warning(dock, "Thorlabs", "Not all axes could be stopped.");
+    stopGamepadJogs(false);
+    m_gamepadSuppressUntilNeutral = true;
 
     // Close the narrow race in which a worker passed its cancellation check
     // immediately before the stop request and starts the SDK command just after it.

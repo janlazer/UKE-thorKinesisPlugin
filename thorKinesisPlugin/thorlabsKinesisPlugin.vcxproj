@@ -86,7 +86,7 @@
       <OutputFile>$(OutDir)\$(ProjectName).dll</OutputFile>
       <AdditionalLibraryDirectories>$(QWTLIB);C:\Program Files\Thorlabs\Kinesis;.;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>qwtd.lib;opengl32.lib;glu32.lib;%(AdditionalDependencies);Thorlabs.MotionControl.VerticalStage.lib;Thorlabs.MotionControl.Benchtop.DCServo.lib</AdditionalDependencies>
+      <AdditionalDependencies>qwtd.lib;hid.lib;xinput.lib;user32.lib;opengl32.lib;glu32.lib;%(AdditionalDependencies);Thorlabs.MotionControl.VerticalStage.lib;Thorlabs.MotionControl.Benchtop.DCServo.lib</AdditionalDependencies>
     </Link>
     <QtMoc>
       <ExecutionDescription>Moc'ing %(Identity)...</ExecutionDescription>
@@ -115,7 +115,7 @@
       <OutputFile>$(OutDir)\$(ProjectName).dll</OutputFile>
       <AdditionalLibraryDirectories>$(QWTLIB);C:\Program Files\Thorlabs\Kinesis;.;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>false</GenerateDebugInformation>
-      <AdditionalDependencies>opengl32.lib;glu32.lib;%(AdditionalDependencies);qwt.lib;Thorlabs.MotionControl.VerticalStage.lib;Thorlabs.MotionControl.Benchtop.DCServo.lib</AdditionalDependencies>
+      <AdditionalDependencies>hid.lib;xinput.lib;user32.lib;opengl32.lib;glu32.lib;%(AdditionalDependencies);qwt.lib;Thorlabs.MotionControl.VerticalStage.lib;Thorlabs.MotionControl.Benchtop.DCServo.lib</AdditionalDependencies>
     </Link>
     <QtMoc>
       <ExecutionDescription>Moc'ing %(Identity)...</ExecutionDescription>
@@ -135,6 +135,7 @@
     <ClCompile Include="KinesisDetect.cpp" />
     <ClCompile Include="ScanValidation.cpp" />
     <ClCompile Include="ThorlabsPositionManagerDialog.cpp" />
+    <ClCompile Include="WindowsGamepadInput.cpp" />
     <ClCompile Include="thorlabsKinesisPlugin.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -145,6 +146,7 @@
     <ClInclude Include="KinesisDetect.h" />
     <ClInclude Include="ScanValidation.h" />
     <ClInclude Include="ThorlabsPositionManagerDialog.h" />
+    <ClInclude Include="WindowsGamepadInput.h" />
     <ClInclude Include="thorlabsKinesisPlugin_global.h" />
   </ItemGroup>
   <ItemGroup>

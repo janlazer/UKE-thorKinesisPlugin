@@ -73,6 +73,8 @@ public:
     double mmPerDeviceUnit(unsigned channel) const;
     double getMaxVelocityMmS(unsigned channel, short* errOut = nullptr) const;
     bool setMaxVelocityMmS(unsigned channel, double maxVelocityMmS, short* errOut = nullptr);
+    bool configureContinuousJog(unsigned channel, double maxVelocityMmS, short* errOut = nullptr);
+    bool moveJog(unsigned channel, bool forwards, short* errOut = nullptr);
 
     double deviceToUm(int32_t deviceUnits, unsigned channel) const;
     double deviceToMm(int32_t deviceUnits, unsigned channel) const;
@@ -87,6 +89,8 @@ public:
     bool disableTrigger(unsigned channel, short* errOut = nullptr);
     bool disableTrigger(unsigned channel, bool force, short* errOut = nullptr);
     bool isTriggerEnabled(unsigned channel) const;
+    bool configureTriggerOutputGpo(unsigned channel, unsigned outputPort, short* errOut = nullptr);
+    bool setDigitalOutput(unsigned channel, unsigned outputPort, bool high, short* errOut = nullptr);
 
     const std::string& serial() const { return m_serial; }
     bool isOpen() const { return m_isOpen; }
