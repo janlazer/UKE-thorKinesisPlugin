@@ -185,9 +185,9 @@ private:
         double baseJogVelocityMmS = 0.5;
         double fastMultiplier = 3.0;
         double slowMultiplier = 0.25;
-        int triggerButton = 0;
-        int slowButton = 1;
-        int fastButton = 2;
+        int triggerButton = 1;
+        int slowButton = 2;
+        int fastButton = 0;
         int zDownButton = 4;
         int zUpButton = 5;
         std::array<GamepadDirectionBinding, 4> directionBindings;
@@ -266,7 +266,7 @@ private:
     void clearGamepadJogState();
     bool startGamepadJogAxis(int axisIndex, int sign, double velocityMmS);
     void stopGamepadJogAxis(int axisIndex, bool sendStop, bool immediate = false);
-    bool isGamepadZJogAllowed(int axisIndex, int sign, double velocityMmS) const;
+    bool isGamepadZJogAllowed(int axisIndex, int sign) const;
     bool pulseGamepadTrigger();
 
 private:

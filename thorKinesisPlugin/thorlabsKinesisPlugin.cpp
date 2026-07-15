@@ -75,9 +75,7 @@ namespace
     constexpr int kGamepadDirectionRight = 3;
     constexpr double kGamepadM30MaxJogVelocityMmS = 2.6;
     constexpr double kGamepadKvsMaxJogVelocityMmS = 2.0;
-    constexpr double kGamepadKvsJogAccelerationMmS2 = 2.0;
-    constexpr double kGamepadKvsStopReactionTimeS = 0.30;
-    constexpr double kGamepadKvsFixedStopMarginMm = 0.05;
+    constexpr double kGamepadLimitToleranceUm = 1.0;
     constexpr int kGamepadProfiledStopStatusDelayMs = 250;
     constexpr double kGamepadVelocityChangeTolerance = 0.001;
 
@@ -887,8 +885,7 @@ void thorlabsKinesisPlugin::clearGamepadJogState()
     m_gamepadSuppressUntilNeutral = false;
 }
 
-bool thorlabsKinesisPlugin::isGamepadZJogAllowed(
-    int axisIndex, int sign, double velocityMmS) const
+bool thorlabsKinesisPlugin::isGamepadZJogAllowed(int axisIndex, int sign) const
 {
     if (axisIndex < 0 || axisIndex >= m_axes.size())
         return false;
@@ -917,25 +914,16 @@ bool thorlabsKinesisPlugin::isGamepadZJogAllowed(
     if (!readAxisPositionUm(axisIndex, posUm) || !std::isfinite(posUm))
         return false;
 
-    double stopMarginUm = 1.0;
-    if (!axis.isM30xy)
-    {
-        const double clampedVelocityMmS =
-            qBound(0.01, velocityMmS, kGamepadKvsMaxJogVelocityMmS);
-        const double brakingDistanceMm =
-            (clampedVelocityMmS * clampedVelocityMmS)
-            / (2.0 * kGamepadKvsJogAccelerationMmS2);
-        stopMarginUm = 1000.0 * (brakingDistanceMm
-            + clampedVelocityMmS * kGamepadKvsStopReactionTimeS
-            + kGamepadKvsFixedStopMarginMm);
-    }
-
-    if (maxUm - minUm <= 2.0 * stopMarginUm)
+    // KVS gamepad motion is a normal position move whose target is the active
+    // soft limit. The controller therefore owns the complete deceleration
+    // profile and cannot run past that target; a velocity-based braking margin
+    // would unnecessarily block short but valid Z ranges.
+    if (maxUm - minUm <= 2.0 * kGamepadLimitToleranceUm)
         return false;
     if (sign > 0)
-        return posUm < maxUm - stopMarginUm;
+        return posUm < maxUm - kGamepadLimitToleranceUm;
     if (sign < 0)
-        return posUm > minUm + stopMarginUm;
+        return posUm > minUm + kGamepadLimitToleranceUm;
     return true;
 }
 
@@ -952,6 +940,11 @@ bool thorlabsKinesisPlugin::startGamepadJogAxis(int axisIndex, int sign, double 
     }
 
     AxisEntry& axis = m_axes[axisIndex];
+    const auto showKvsGamepadStatus = [this, &axis](const QString& detail) {
+        if (!axis.isM30xy && ui.lineEdit_gamepadStatus)
+            ui.lineEdit_gamepadStatus->setText(
+                QStringLiteral("%1: %2").arg(axisDisplayText(axis), detail));
+    };
     const double maxVelocityMmS = axis.isM30xy
         ? kGamepadM30MaxJogVelocityMmS
         : kGamepadKvsMaxJogVelocityMmS;
@@ -966,11 +959,27 @@ bool thorlabsKinesisPlugin::startGamepadJogAxis(int axisIndex, int sign, double 
 
     bool moving = false;
     bool homed = false;
-    if (!readAxisMotionState(axisIndex, moving, homed) || moving || !homed)
+    if (!readAxisMotionState(axisIndex, moving, homed))
+    {
+        showKvsGamepadStatus(QStringLiteral("status read failed"));
         return false;
+    }
+    if (moving)
+    {
+        showKvsGamepadStatus(QStringLiteral("already moving"));
+        return false;
+    }
+    if (!homed)
+    {
+        showKvsGamepadStatus(QStringLiteral("not homed"));
+        return false;
+    }
     m_gamepadRestartNotBefore.remove(axisIndex);
-    if (!isGamepadZJogAllowed(axisIndex, sign, clampedVelocityMmS))
+    if (!isGamepadZJogAllowed(axisIndex, sign))
+    {
+        showKvsGamepadStatus(QStringLiteral("at configured limit"));
         return false;
+    }
 
     short err = 0;
     bool ok = false;
@@ -986,16 +995,45 @@ bool thorlabsKinesisPlugin::startGamepadJogAxis(int axisIndex, int sign, double 
     else
     {
         KVSStage* stage = kvsForSerial(axis.baseSerial);
-        ok = stage
-            && stage->isOpen()
-            && disableAllTriggers()
-            && stage->configureContinuousJog(clampedVelocityMmS, &err)
-            && stage->moveJog(sign > 0, &err);
+        double minUm = 0.0;
+        double maxUm = 0.0;
+        if (stage && stage->isOpen() && axisTravelLimitsUm(axis, minUm, maxUm))
+        {
+            const bool configuredZAxis =
+                axis.globalAxisId == m_gamepadConfig.zAxisGlobalId;
+            if (configuredZAxis && m_gamepadConfig.zSoftLimitsEnabled)
+            {
+                minUm = (std::max)(minUm, m_gamepadConfig.zMinUm);
+                maxUm = (std::min)(maxUm, m_gamepadConfig.zMaxUm);
+            }
+
+            const double targetUm = sign > 0 ? maxUm : minUm;
+            const int32_t targetDevice = stage->umToDevice(targetUm, &err);
+            ok = err == 0
+                && disableAllTriggers()
+                && stage->setMaxVelocityMmS(clampedVelocityMmS, &err)
+                && stage->beginMoveTo(targetDevice, &err);
+
+            qDebug() << "Gamepad KVS hold-to-move"
+                << "axis=" << axis.globalAxisId
+                << "sign=" << sign
+                << "targetUm=" << targetUm
+                << "velocityMmS=" << clampedVelocityMmS
+                << "err=" << err
+                << "started=" << ok;
+        }
     }
 
     if (!ok)
+    {
+        showKvsGamepadStatus(
+            QStringLiteral("move rejected (error %1)").arg(err));
+        m_gamepadRestartNotBefore[axisIndex] = std::chrono::steady_clock::now()
+            + std::chrono::milliseconds(kGamepadProfiledStopStatusDelayMs);
         return false;
+    }
 
+    showKvsGamepadStatus(QStringLiteral("active"));
     m_gamepadActiveJogs[axisIndex] = { sign, clampedVelocityMmS };
     m_busyAxisIndices.insert(axisIndex);
     refreshAxisStatusUi(axisIndex);
@@ -1239,7 +1277,7 @@ void thorlabsKinesisPlugin::pollGamepad()
         const int desiredSign = desiredSigns.value(axisIndex, 0);
         const GamepadActiveJog activeJog = m_gamepadActiveJogs.value(axisIndex);
         if (desiredSign == 0
-            || !isGamepadZJogAllowed(axisIndex, desiredSign, activeJog.velocityMmS))
+            || !isGamepadZJogAllowed(axisIndex, desiredSign))
             stopGamepadJogAxis(axisIndex, true);
     }
 
@@ -1248,7 +1286,7 @@ void thorlabsKinesisPlugin::pollGamepad()
         const int axisIndex = it.key();
         const int desiredSign = it.value();
         if (desiredSign == 0
-            || !isGamepadZJogAllowed(axisIndex, desiredSign, velocityMmS))
+            || !isGamepadZJogAllowed(axisIndex, desiredSign))
             continue;
 
         const GamepadActiveJog activeJog = m_gamepadActiveJogs.value(axisIndex);
@@ -1930,14 +1968,14 @@ void thorlabsKinesisPlugin::openGamepadConfigDialog()
     auto* zUpButtonCombo = makeButtonCombo(buttonGroup, editedConfig.zUpButton);
     buttonLayout->addWidget(new QLabel(QStringLiteral("Trigger (A):"), buttonGroup), 0, 0);
     buttonLayout->addWidget(triggerButtonCombo, 0, 1);
-    buttonLayout->addWidget(new QLabel(QStringLiteral("Slower (B):"), buttonGroup), 0, 2);
-    buttonLayout->addWidget(slowButtonCombo, 0, 3);
     buttonLayout->addWidget(new QLabel(QStringLiteral("Faster (X):"), buttonGroup), 1, 0);
     buttonLayout->addWidget(fastButtonCombo, 1, 1);
-    buttonLayout->addWidget(new QLabel(QStringLiteral("Z down (L1):"), buttonGroup), 1, 2);
-    buttonLayout->addWidget(zDownButtonCombo, 1, 3);
-    buttonLayout->addWidget(new QLabel(QStringLiteral("Z up (R1):"), buttonGroup), 2, 0);
-    buttonLayout->addWidget(zUpButtonCombo, 2, 1);
+    buttonLayout->addWidget(new QLabel(QStringLiteral("Slower (B):"), buttonGroup), 1, 2);
+    buttonLayout->addWidget(slowButtonCombo, 1, 3);
+    buttonLayout->addWidget(new QLabel(QStringLiteral("Z down (L1):"), buttonGroup), 2, 0);
+    buttonLayout->addWidget(zDownButtonCombo, 2, 1);
+    buttonLayout->addWidget(new QLabel(QStringLiteral("Z up (R1):"), buttonGroup), 2, 2);
+    buttonLayout->addWidget(zUpButtonCombo, 2, 3);
     rootLayout->addWidget(buttonGroup);
 
     auto* directionGroup = new QGroupBox(QStringLiteral("XY Directions"), &dialog);

@@ -1180,8 +1180,8 @@ bool KVSStage::moveJog(bool forwards, short* errOut)
     }
 
     const MOT_TravelDirection direction = forwards
-        ? static_cast<MOT_TravelDirection>(MOT_Forwards)
-        : static_cast<MOT_TravelDirection>(MOT_Reverse);
+        ? static_cast<MOT_TravelDirection>(0x01)
+        : static_cast<MOT_TravelDirection>(0x02);
     const short err = KVS_MoveJog(m_serialCStr, direction);
     return okOrLog("KVS_MoveJog", m_serial, err, errOut);
 }
@@ -1292,32 +1292,38 @@ bool KVSStage::applyTriggerConfig(short* errOut)
         return false;
     }
 
-    KMOT_TriggerConfig cfg = {};
-    KMOT_TriggerParams params = {};
-
-    cfg.Trigger1Mode = static_cast<KMOT_TriggerPortMode>(requested.trigger1Mode);
-    cfg.Trigger1Polarity = static_cast<KMOT_TriggerPortPolarity>(requested.trigger1Polarity);
-    cfg.Trigger2Mode = static_cast<KMOT_TriggerPortMode>(requested.trigger2Mode);
-    cfg.Trigger2Polarity = static_cast<KMOT_TriggerPortPolarity>(requested.trigger2Polarity);
-
-    params.TriggerStartPositionFwd = requested.startPosFwd;
-    params.TriggerIntervalFwd = requested.intervalFwd;
-    params.TriggerPulseCountFwd = requested.pulseCountFwd;
-    params.TriggerStartPositionRev = requested.startPosRev;
-    params.TriggerIntervalRev = requested.intervalRev;
-    params.TriggerPulseCountRev = requested.pulseCountRev;
-    params.TriggerPulseWidth = requested.pulseWidthUs;
-    params.CycleCount = requested.cycleCount;
+    const KMOT_TriggerPortMode trigger1Mode =
+        static_cast<KMOT_TriggerPortMode>(requested.trigger1Mode);
+    const KMOT_TriggerPortPolarity trigger1Polarity =
+        static_cast<KMOT_TriggerPortPolarity>(requested.trigger1Polarity);
+    const KMOT_TriggerPortMode trigger2Mode =
+        static_cast<KMOT_TriggerPortMode>(requested.trigger2Mode);
+    const KMOT_TriggerPortPolarity trigger2Polarity =
+        static_cast<KMOT_TriggerPortPolarity>(requested.trigger2Polarity);
 
     if (!disableTrigger(errOut))
         return false;
 
-    short err = KVS_SetTriggerParamsParamsBlock(m_serialCStr, &params);
-    if (!okOrLog("KVS_SetTriggerParamsParamsBlock", m_serial, err, errOut))
+    short err = KVS_SetTriggerParamsParams(
+        m_serialCStr,
+        requested.startPosFwd,
+        requested.intervalFwd,
+        requested.pulseCountFwd,
+        requested.startPosRev,
+        requested.intervalRev,
+        requested.pulseCountRev,
+        requested.pulseWidthUs,
+        requested.cycleCount);
+    if (!okOrLog("KVS_SetTriggerParamsParams", m_serial, err, errOut))
         return false;
 
-    err = KVS_SetTriggerConfigParamsBlock(m_serialCStr, &cfg);
-    if (!okOrLog("KVS_SetTriggerConfigParamsBlock", m_serial, err, errOut))
+    err = KVS_SetTriggerConfigParams(
+        m_serialCStr,
+        trigger1Mode,
+        trigger1Polarity,
+        trigger2Mode,
+        trigger2Polarity);
+    if (!okOrLog("KVS_SetTriggerConfigParams", m_serial, err, errOut))
     {
         short ignored = 0;
         disableTrigger(&ignored);
@@ -1336,14 +1342,13 @@ bool KVSStage::disableTrigger(short* errOut)
     if (!validateOpen(errOut))
         return false;
 
-    KMOT_TriggerConfig cfg = {};
-    cfg.Trigger1Mode = KMOT_TrigDisabled;
-    cfg.Trigger1Polarity = KMOT_TrigPolarityHigh;
-    cfg.Trigger2Mode = KMOT_TrigDisabled;
-    cfg.Trigger2Polarity = KMOT_TrigPolarityHigh;
-
-    short err = KVS_SetTriggerConfigParamsBlock(m_serialCStr, &cfg);
-    if (!okOrLog("KVS_SetTriggerConfigParamsBlock", m_serial, err, errOut))
+    const short err = KVS_SetTriggerConfigParams(
+        m_serialCStr,
+        KMOT_TrigDisabled,
+        KMOT_TrigPolarityHigh,
+        KMOT_TrigDisabled,
+        KMOT_TrigPolarityHigh);
+    if (!okOrLog("KVS_SetTriggerConfigParams", m_serial, err, errOut))
         return false;
 
     m_trig.enabled = false;
@@ -1361,14 +1366,17 @@ bool KVSStage::configureTriggerOutputGpo(unsigned outputPort, short* errOut)
         return false;
     }
 
-    KMOT_TriggerConfig cfg = {};
-    cfg.Trigger1Mode = outputPort == 1 ? KMOT_TrigOut_GPO : KMOT_TrigDisabled;
-    cfg.Trigger1Polarity = KMOT_TrigPolarityHigh;
-    cfg.Trigger2Mode = outputPort == 2 ? KMOT_TrigOut_GPO : KMOT_TrigDisabled;
-    cfg.Trigger2Polarity = KMOT_TrigPolarityHigh;
-
-    const short err = KVS_SetTriggerConfigParamsBlock(m_serialCStr, &cfg);
-    if (!okOrLog("KVS_SetTriggerConfigParamsBlock(GPO)", m_serial, err, errOut))
+    const KMOT_TriggerPortMode trigger1Mode =
+        outputPort == 1 ? KMOT_TrigOut_GPO : KMOT_TrigDisabled;
+    const KMOT_TriggerPortMode trigger2Mode =
+        outputPort == 2 ? KMOT_TrigOut_GPO : KMOT_TrigDisabled;
+    const short err = KVS_SetTriggerConfigParams(
+        m_serialCStr,
+        trigger1Mode,
+        KMOT_TrigPolarityHigh,
+        trigger2Mode,
+        KMOT_TrigPolarityHigh);
+    if (!okOrLog("KVS_SetTriggerConfigParams(GPO)", m_serial, err, errOut))
         return false;
 
     m_trig.enabled = true;

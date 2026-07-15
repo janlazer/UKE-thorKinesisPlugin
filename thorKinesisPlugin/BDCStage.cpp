@@ -1289,8 +1289,8 @@ bool BDCStage::moveJog(unsigned channel, bool forwards, short* errOut)
         return false;
 
     const MOT_TravelDirection direction = forwards
-        ? static_cast<MOT_TravelDirection>(MOT_Forwards)
-        : static_cast<MOT_TravelDirection>(MOT_Reverse);
+        ? static_cast<MOT_TravelDirection>(0x01)
+        : static_cast<MOT_TravelDirection>(0x02);
     const short err = BDC_MoveJog(m_serialCStr, static_cast<short>(channel), direction);
     return okOrLog("BDC_MoveJog", m_serial, err, channel, errOut);
 }
@@ -1482,34 +1482,45 @@ bool BDCStage::applyTriggerConfig(unsigned channel, short* errOut)
         return false;
     }
 
-    KMOT_TriggerConfig cfg = {};
-    KMOT_TriggerParams params = {};
-
-    cfg.Trigger1Mode = static_cast<KMOT_TriggerPortMode>(requested.trigger1Mode);
-    cfg.Trigger1Polarity = static_cast<KMOT_TriggerPortPolarity>(requested.trigger1Polarity);
-    cfg.Trigger2Mode = static_cast<KMOT_TriggerPortMode>(requested.trigger2Mode);
-    cfg.Trigger2Polarity = static_cast<KMOT_TriggerPortPolarity>(requested.trigger2Polarity);
-
-    params.TriggerStartPositionFwd = requested.startPosFwd;
-    params.TriggerIntervalFwd = requested.intervalFwd;
-    params.TriggerPulseCountFwd = requested.pulseCountFwd;
-    params.TriggerStartPositionRev = requested.startPosRev;
-    params.TriggerIntervalRev = requested.intervalRev;
-    params.TriggerPulseCountRev = requested.pulseCountRev;
-    params.TriggerPulseWidth = requested.pulseWidthUs;
-    params.CycleCount = requested.cycleCount;
+    const KMOT_TriggerPortMode trigger1Mode =
+        static_cast<KMOT_TriggerPortMode>(requested.trigger1Mode);
+    const KMOT_TriggerPortPolarity trigger1Polarity =
+        static_cast<KMOT_TriggerPortPolarity>(requested.trigger1Polarity);
+    const KMOT_TriggerPortMode trigger2Mode =
+        static_cast<KMOT_TriggerPortMode>(requested.trigger2Mode);
+    const KMOT_TriggerPortPolarity trigger2Polarity =
+        static_cast<KMOT_TriggerPortPolarity>(requested.trigger2Polarity);
 
     // Keep both outputs disabled until all positional parameters have been
     // accepted. This prevents stale parameters from becoming active.
     if (!disableTrigger(channel, true, errOut))
         return false;
 
-    short err = BDC_SetTriggerParamsBlock(m_serialCStr, (short)channel, &params);
-    if (!okOrLog("BDC_SetTriggerParamsBlock", m_serial, err, channel, errOut))
+    // The block setters are not ABI-safe across all shipped Kinesis versions:
+    // some BDC DLLs overwrite the caller's packed structure. Use the equivalent
+    // scalar API so the DLL cannot write into our stack frame.
+    short err = BDC_SetTriggerParams(
+        m_serialCStr,
+        static_cast<short>(channel),
+        requested.startPosFwd,
+        requested.intervalFwd,
+        requested.pulseCountFwd,
+        requested.startPosRev,
+        requested.intervalRev,
+        requested.pulseCountRev,
+        requested.pulseWidthUs,
+        requested.cycleCount);
+    if (!okOrLog("BDC_SetTriggerParams", m_serial, err, channel, errOut))
         return false;
 
-    err = BDC_SetTriggerConfigParamsBlock(m_serialCStr, (short)channel, &cfg);
-    if (!okOrLog("BDC_SetTriggerConfigParamsBlock", m_serial, err, channel, errOut))
+    err = BDC_SetTriggerConfigParams(
+        m_serialCStr,
+        static_cast<short>(channel),
+        trigger1Mode,
+        trigger1Polarity,
+        trigger2Mode,
+        trigger2Polarity);
+    if (!okOrLog("BDC_SetTriggerConfigParams", m_serial, err, channel, errOut))
     {
         short ignored = 0;
         disableTrigger(channel, true, &ignored);
