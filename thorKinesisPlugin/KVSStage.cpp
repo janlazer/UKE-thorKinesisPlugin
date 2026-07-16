@@ -512,7 +512,11 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
     qDebug() << "KVSStage::open KVS_GetRealValueFromDeviceUnit(vel)"
         << "err=" << velFactorErr
         << "mm_s/device=" << realVelMmPerDevice;
-    if (velFactorErr != 0 || !std::isfinite(realVelMmPerDevice) || realVelMmPerDevice <= 0.0)
+    if (velFactorErr != 0
+        || !std::isfinite(realVelMmPerDevice)
+        || realVelMmPerDevice <= 0.0
+        || !isCloseRelative(realVelMmPerDevice,
+            kKvs30ExpectedVelocityMmPerDeviceUnit, kKvs30VelocityDeviceRelTolerance))
     {
         qDebug() << "KVSStage::open warning: using fixed KVS30/M velocity scale serial=" << m_serialCStr
             << "err=" << velFactorErr
@@ -525,7 +529,11 @@ bool KVSStage::open(const std::string& serial, bool home, short* errOut)
     qDebug() << "KVSStage::open KVS_GetRealValueFromDeviceUnit(acc)"
         << "err=" << accFactorErr
         << "mm_s2/device=" << realAccMmPerDevice;
-    if (accFactorErr != 0 || !std::isfinite(realAccMmPerDevice) || realAccMmPerDevice <= 0.0)
+    if (accFactorErr != 0
+        || !std::isfinite(realAccMmPerDevice)
+        || realAccMmPerDevice <= 0.0
+        || !isCloseRelative(realAccMmPerDevice,
+            kKvs30ExpectedAccelerationMmPerDeviceUnit, kKvs30VelocityDeviceRelTolerance))
     {
         qDebug() << "KVSStage::open warning: using fixed KVS30/M acceleration scale serial=" << m_serialCStr
             << "err=" << accFactorErr
@@ -1016,25 +1024,20 @@ bool KVSStage::setMaxVelocityMmS(double maxVelocityMmS, short* errOut)
 
     if (!std::isfinite(maxVelocityMmS)
         || maxVelocityMmS <= 0.0
-        || maxVelocityMmS > kKvs30MotorMaxVelocityMmS + 1e-9
-        || !std::isfinite(factor_velocity_mm)
-        || factor_velocity_mm <= 0.0)
+        || maxVelocityMmS > kKvs30MotorMaxVelocityMmS + 1e-9)
     {
         qDebug() << "KVSStage::setMaxVelocityMmS invalid velocity serial=" << m_serialCStr
             << "velocityMmS=" << maxVelocityMmS
-            << "maxAllowedMmS=" << kKvs30MotorMaxVelocityMmS
-            << "factor=" << factor_velocity_mm;
+            << "maxAllowedMmS=" << kKvs30MotorMaxVelocityMmS;
         if (errOut) *errOut = kErrInvalidArgument;
         return false;
     }
 
-    int acceleration = 0;
-    int previousMaxVelocity = 0;
-    short err = KVS_GetVelParams(m_serialCStr, &acceleration, &previousMaxVelocity);
-    if (!okOrLog("KVS_GetVelParams", m_serial, err, errOut))
-        return false;
-
-    const double velocityDeviceValue = maxVelocityMmS / factor_velocity_mm;
+    // KVS30/M has a fixed, validated motor scale. Do not derive safety-critical
+    // velocity values from a merely positive runtime factor: corrupted Kinesis
+    // settings can return implausibly small values and overflow the device unit.
+    const double velocityDeviceValue =
+        maxVelocityMmS / kKvs30ExpectedVelocityMmPerDeviceUnit;
     if (!std::isfinite(velocityDeviceValue)
         || velocityDeviceValue <= 0.0
         || velocityDeviceValue > static_cast<double>((std::numeric_limits<int>::max)()))
@@ -1047,19 +1050,23 @@ bool KVSStage::setMaxVelocityMmS(double maxVelocityMmS, short* errOut)
     }
 
     const int maxVelocityDevice = static_cast<int>(std::lround(velocityDeviceValue));
-    if (maxVelocityDevice <= 0)
+    const int expectedMaxVelocityDevice = static_cast<int>(std::lround(
+        maxVelocityMmS / kKvs30ExpectedVelocityMmPerDeviceUnit));
+    if (maxVelocityDevice <= 0
+        || !isSafeKvs30VelocityDeviceValue(maxVelocityDevice, expectedMaxVelocityDevice))
     {
         if (errOut) *errOut = kErrInvalidArgument;
         return false;
     }
 
-    err = KVS_SetVelParams(m_serialCStr, acceleration, maxVelocityDevice);
+    const short err = KVS_SetVelParams(
+        m_serialCStr, kKvs30MoveAccelerationDeviceUnits, maxVelocityDevice);
     if (!okOrLog("KVS_SetVelParams", m_serial, err, errOut))
         return false;
 
     qDebug() << "KVSStage::setMaxVelocityMmS serial=" << m_serialCStr
         << "velocityMmS=" << maxVelocityMmS
-        << "accelerationDevice=" << acceleration
+        << "accelerationDevice=" << kKvs30MoveAccelerationDeviceUnits
         << "maxVelocityDevice=" << maxVelocityDevice;
 
     if (errOut) *errOut = 0;

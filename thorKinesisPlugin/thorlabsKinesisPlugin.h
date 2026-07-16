@@ -177,6 +177,7 @@ private:
 
     struct GamepadConfig
     {
+        int schemaVersion = 4;
         bool enabled = false;
         QString deviceKey;
         double axisLeftXCenter = 0.0;
@@ -193,8 +194,8 @@ private:
         std::array<GamepadDirectionBinding, 4> directionBindings;
         int zAxisGlobalId = 0;
         bool zSoftLimitsEnabled = true;
-        double zMinUm = 0.0;
-        double zMaxUm = 30000.0;
+        double zMinUm = 10000.0;
+        double zMaxUm = 29700.0;
         int triggerAxisGlobalId = 0;
         int triggerOutputPort = 1;
         int triggerPulseMs = 50;

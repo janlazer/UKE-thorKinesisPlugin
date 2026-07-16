@@ -321,6 +321,7 @@ IOutput* thorlabsKinesisPlugin::getOutput()
 QMap<QString, QString> thorlabsKinesisPlugin::getSaveValueInformation()
 {
     QMap<QString, QString> map;
+    map.insert(QStringLiteral("gamepad/schemaVersion"), QString::number(m_gamepadConfig.schemaVersion));
     map.insert(QStringLiteral("gamepad/enabled"), boolSaveText(m_gamepadConfig.enabled));
     map.insert(QStringLiteral("gamepad/deviceKey"), m_gamepadConfig.deviceKey);
     map.insert(QStringLiteral("gamepad/axisLeftXCenter"), QString::number(m_gamepadConfig.axisLeftXCenter, 'g', 12));
@@ -352,6 +353,8 @@ QMap<QString, QString> thorlabsKinesisPlugin::getSaveValueInformation()
 
 void thorlabsKinesisPlugin::setLoadValueInformation(QMap<QString, QString> map)
 {
+    m_gamepadConfig.schemaVersion = qBound(0,
+        loadIntValue(map, QStringLiteral("gamepad/schemaVersion"), 0), 4);
     m_gamepadConfig.enabled = loadBoolValue(map, QStringLiteral("gamepad/enabled"), m_gamepadConfig.enabled);
     m_gamepadConfig.deviceKey = map.value(QStringLiteral("gamepad/deviceKey"), m_gamepadConfig.deviceKey);
     m_gamepadConfig.axisLeftXCenter = loadDoubleValue(map, QStringLiteral("gamepad/axisLeftXCenter"), m_gamepadConfig.axisLeftXCenter);
@@ -393,7 +396,7 @@ void thorlabsKinesisPlugin::setLoadValueInformation(QMap<QString, QString> map)
     m_gamepadConfig.triggerOutputPort =
         qBound(1, loadIntValue(map, QStringLiteral("gamepad/triggerOutputPort"), m_gamepadConfig.triggerOutputPort), 2);
     m_gamepadConfig.triggerPulseMs =
-        qBound(5, loadIntValue(map, QStringLiteral("gamepad/triggerPulseMs"), m_gamepadConfig.triggerPulseMs), 1000);
+        qBound(1, loadIntValue(map, QStringLiteral("gamepad/triggerPulseMs"), m_gamepadConfig.triggerPulseMs), 1000);
 
     if (m_gamepadConfig.zMaxUm < m_gamepadConfig.zMinUm)
         std::swap(m_gamepadConfig.zMinUm, m_gamepadConfig.zMaxUm);
@@ -799,6 +802,66 @@ void thorlabsKinesisPlugin::ensureGamepadDefaults()
     const int yAxisId = defaultAxisId(QChar('y'));
     const int zAxisId = defaultAxisId(QChar('z'));
 
+    if (m_gamepadConfig.schemaVersion < 2)
+    {
+        const GamepadDirectionBinding& oldUp =
+            m_gamepadConfig.directionBindings[kGamepadDirectionUp];
+        const GamepadDirectionBinding& oldDown =
+            m_gamepadConfig.directionBindings[kGamepadDirectionDown];
+        const GamepadDirectionBinding& oldLeft =
+            m_gamepadConfig.directionBindings[kGamepadDirectionLeft];
+        const GamepadDirectionBinding& oldRight =
+            m_gamepadConfig.directionBindings[kGamepadDirectionRight];
+        const bool legacyDefaultDirections = xAxisId > 0 && yAxisId > 0
+            && oldUp.globalAxisId == yAxisId && oldUp.sign > 0
+            && oldDown.globalAxisId == yAxisId && oldDown.sign < 0
+            && oldLeft.globalAxisId == xAxisId && oldLeft.sign < 0
+            && oldRight.globalAxisId == xAxisId && oldRight.sign > 0;
+
+        if (legacyDefaultDirections)
+        {
+            m_gamepadConfig.directionBindings[kGamepadDirectionUp] = { xAxisId, +1 };
+            m_gamepadConfig.directionBindings[kGamepadDirectionDown] = { xAxisId, -1 };
+            m_gamepadConfig.directionBindings[kGamepadDirectionLeft] = { yAxisId, -1 };
+            m_gamepadConfig.directionBindings[kGamepadDirectionRight] = { yAxisId, +1 };
+
+            if (m_gamepadConfig.triggerAxisGlobalId == zAxisId)
+                m_gamepadConfig.triggerAxisGlobalId = xAxisId;
+        }
+        m_gamepadConfig.schemaVersion = 2;
+    }
+
+    if (m_gamepadConfig.schemaVersion < 3)
+    {
+        GamepadDirectionBinding& left =
+            m_gamepadConfig.directionBindings[kGamepadDirectionLeft];
+        GamepadDirectionBinding& right =
+            m_gamepadConfig.directionBindings[kGamepadDirectionRight];
+        if (yAxisId > 0
+            && left.globalAxisId == yAxisId && left.sign < 0
+            && right.globalAxisId == yAxisId && right.sign > 0)
+        {
+            left.sign = +1;
+            right.sign = -1;
+        }
+        m_gamepadConfig.schemaVersion = 3;
+    }
+
+    if (m_gamepadConfig.schemaVersion < 4)
+    {
+        constexpr double oldDefaultZMinUm = 0.0;
+        constexpr double oldDefaultZMaxUm = 30000.0;
+        constexpr double newDefaultZMinUm = 10000.0;
+        constexpr double newDefaultZMaxUm = 29700.0;
+        if (std::abs(m_gamepadConfig.zMinUm - oldDefaultZMinUm) < 0.5
+            && std::abs(m_gamepadConfig.zMaxUm - oldDefaultZMaxUm) < 0.5)
+        {
+            m_gamepadConfig.zMinUm = newDefaultZMinUm;
+            m_gamepadConfig.zMaxUm = newDefaultZMaxUm;
+        }
+        m_gamepadConfig.schemaVersion = 4;
+    }
+
     auto ensureBinding = [&](int direction, int axisId, int sign) {
         GamepadDirectionBinding& binding = m_gamepadConfig.directionBindings[direction];
         if (binding.globalAxisId <= 0 || axisIndexFromGlobalId(binding.globalAxisId) < 0)
@@ -808,10 +871,10 @@ void thorlabsKinesisPlugin::ensureGamepadDefaults()
             binding.sign = sign;
     };
 
-    ensureBinding(kGamepadDirectionUp, yAxisId, +1);
-    ensureBinding(kGamepadDirectionDown, yAxisId, -1);
-    ensureBinding(kGamepadDirectionLeft, xAxisId, -1);
-    ensureBinding(kGamepadDirectionRight, xAxisId, +1);
+    ensureBinding(kGamepadDirectionUp, xAxisId, +1);
+    ensureBinding(kGamepadDirectionDown, xAxisId, -1);
+    ensureBinding(kGamepadDirectionLeft, yAxisId, +1);
+    ensureBinding(kGamepadDirectionRight, yAxisId, -1);
 
     if (m_gamepadConfig.zAxisGlobalId <= 0
         || axisIndexFromGlobalId(m_gamepadConfig.zAxisGlobalId) < 0)
@@ -822,9 +885,11 @@ void thorlabsKinesisPlugin::ensureGamepadDefaults()
     if (m_gamepadConfig.triggerAxisGlobalId <= 0
         || axisIndexFromGlobalId(m_gamepadConfig.triggerAxisGlobalId) < 0)
     {
-        m_gamepadConfig.triggerAxisGlobalId = zAxisId > 0
-            ? zAxisId
-            : (m_axes.isEmpty() ? 0 : m_axes.front().globalAxisId);
+        m_gamepadConfig.triggerAxisGlobalId = xAxisId > 0
+            ? xAxisId
+            : (zAxisId > 0
+                ? zAxisId
+                : (m_axes.isEmpty() ? 0 : m_axes.front().globalAxisId));
     }
 
     m_gamepadConfig.deadzone = qBound(0.05, m_gamepadConfig.deadzone, 0.90);
@@ -833,7 +898,7 @@ void thorlabsKinesisPlugin::ensureGamepadDefaults()
     m_gamepadConfig.fastMultiplier = qBound(1.0, m_gamepadConfig.fastMultiplier, 10.0);
     m_gamepadConfig.slowMultiplier = qBound(0.05, m_gamepadConfig.slowMultiplier, 1.0);
     m_gamepadConfig.triggerOutputPort = qBound(1, m_gamepadConfig.triggerOutputPort, 2);
-    m_gamepadConfig.triggerPulseMs = qBound(5, m_gamepadConfig.triggerPulseMs, 1000);
+    m_gamepadConfig.triggerPulseMs = qBound(1, m_gamepadConfig.triggerPulseMs, 1000);
 
     if (m_gamepadConfig.zMaxUm < m_gamepadConfig.zMinUm)
         std::swap(m_gamepadConfig.zMinUm, m_gamepadConfig.zMaxUm);
@@ -1009,10 +1074,29 @@ bool thorlabsKinesisPlugin::startGamepadJogAxis(int axisIndex, int sign, double 
 
             const double targetUm = sign > 0 ? maxUm : minUm;
             const int32_t targetDevice = stage->umToDevice(targetUm, &err);
-            ok = err == 0
-                && disableAllTriggers()
-                && stage->setMaxVelocityMmS(clampedVelocityMmS, &err)
-                && stage->beginMoveTo(targetDevice, &err);
+            if (err != 0)
+            {
+                showKvsGamepadStatus(
+                    QStringLiteral("target conversion rejected (error %1)").arg(err));
+            }
+            else if (!disableAllTriggers())
+            {
+                showKvsGamepadStatus(QStringLiteral("trigger disable failed"));
+            }
+            else if (!stage->setMaxVelocityMmS(clampedVelocityMmS, &err))
+            {
+                showKvsGamepadStatus(
+                    QStringLiteral("velocity rejected (error %1)").arg(err));
+            }
+            else if (!stage->beginMoveTo(targetDevice, &err))
+            {
+                showKvsGamepadStatus(
+                    QStringLiteral("move command rejected (error %1)").arg(err));
+            }
+            else
+            {
+                ok = true;
+            }
 
             qDebug() << "Gamepad KVS hold-to-move"
                 << "axis=" << axis.globalAxisId
@@ -1026,8 +1110,6 @@ bool thorlabsKinesisPlugin::startGamepadJogAxis(int axisIndex, int sign, double 
 
     if (!ok)
     {
-        showKvsGamepadStatus(
-            QStringLiteral("move rejected (error %1)").arg(err));
         m_gamepadRestartNotBefore[axisIndex] = std::chrono::steady_clock::now()
             + std::chrono::milliseconds(kGamepadProfiledStopStatusDelayMs);
         return false;
@@ -2051,8 +2133,8 @@ void thorlabsKinesisPlugin::openGamepadConfigDialog()
     triggerPortCombo->addItem(QStringLiteral("I/O 2"), 2);
     setComboByData(triggerPortCombo, editedConfig.triggerOutputPort);
     auto* triggerPulseSpin = new QSpinBox(triggerGroup);
-    triggerPulseSpin->setRange(5, 1000);
-    triggerPulseSpin->setSingleStep(5);
+    triggerPulseSpin->setRange(1, 1000);
+    triggerPulseSpin->setSingleStep(1);
     triggerPulseSpin->setSuffix(QStringLiteral(" ms"));
     triggerPulseSpin->setValue(editedConfig.triggerPulseMs);
     triggerLayout->addWidget(new QLabel(QStringLiteral("Axis:"), triggerGroup), 0, 0);
