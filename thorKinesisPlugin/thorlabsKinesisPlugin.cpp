@@ -57,7 +57,8 @@ namespace
 {
     constexpr double kMaximumLaserTriggerFrequencyHz = 20.0;
     constexpr double kScanLineAxisToleranceUm = 1e-6;
-    constexpr int kPositionRefreshIntervalMs = 1000;
+    constexpr int kPositionRefreshIntervalMs = 200;
+    constexpr int kBlockingMoveRefreshIntervalMs = 200;
     constexpr int kStageFrameWidth = 680;
     constexpr int kSerialButtonHeight = 24;
     constexpr int kPanicButtonWidth = 120;
@@ -289,6 +290,12 @@ thorlabsKinesisPlugin::thorlabsKinesisPlugin()
     dock->setWindowTitle(getName());
 
     connect(dock, &QObject::destroyed, this, [this]() { dock = nullptr; });
+    connect(dock, &QDockWidget::topLevelChanged, this, [this](bool) {
+        QTimer::singleShot(0, this, [this]() { updateAxisFrameAreaHeight(); });
+    });
+    connect(dock, &QDockWidget::dockLocationChanged, this, [this](Qt::DockWidgetArea) {
+        QTimer::singleShot(0, this, [this]() { updateAxisFrameAreaHeight(); });
+    });
 
     initGUI();
 
@@ -617,10 +624,17 @@ void thorlabsKinesisPlugin::waitForMotionToFinish()
 bool thorlabsKinesisPlugin::waitUntilAllAxesStopped(int timeoutMs)
 {
     const auto t0 = std::chrono::steady_clock::now();
+    const std::function<void()> progressCallback = createBlockingMovePositionCallback();
     while (true)
     {
         if (isStopped())
+        {
+            refreshBlockingMovePositionDisplays();
             return true;
+        }
+
+        if (progressCallback)
+            progressCallback();
 
         const auto now = std::chrono::steady_clock::now();
         const int elapsed = static_cast<int>(
@@ -1512,10 +1526,19 @@ void thorlabsKinesisPlugin::updateAxisFrameAreaHeight()
     ui.stageFrameContainer->setMaximumHeight(height > 0 ? height : QWIDGETSIZE_MAX);
     ui.stageFrameContainer->updateGeometry();
 
-    if (dock && dock->widget() && dock->widget()->layout())
-        dock->widget()->layout()->activate();
+    if (ui.dockWidgetContents)
+    {
+        // Release the previous selection's height before measuring the new layout.
+        ui.dockWidgetContents->setMinimumHeight(0);
+        if (ui.dockWidgetContents->layout())
+            ui.dockWidgetContents->layout()->activate();
+        const int contentHeight = preferredWidgetHeight(ui.dockWidgetContents);
+        ui.dockWidgetContents->setMinimumHeight(contentHeight);
+        ui.dockWidgetContents->updateGeometry();
+    }
     if (dock)
     {
+        dock->setMinimumHeight(90);
         const int dockHeight = qMax(90, dock->minimumSizeHint().height());
         dock->setMinimumHeight(dockHeight);
         dock->resize(qMax(dock->width(), dock->minimumWidth()), dockHeight);
@@ -2212,11 +2235,44 @@ void thorlabsKinesisPlugin::openGamepadConfigDialog()
 
 void thorlabsKinesisPlugin::refreshAllAxisPositionsUi()
 {
-    if (!dock || !isInitialized())
+    if (!dock)
         return;
 
     for (int id = 0; id < m_axisUi.size(); ++id)
         refreshAxisPositionUi(id);
+}
+
+void thorlabsKinesisPlugin::refreshBlockingMovePositionDisplays()
+{
+    if (!dock || QThread::currentThread() != thread())
+        return;
+
+    refreshAllAxisPositionsUi();
+    for (const AxisUi& axisUi : m_axisUi)
+    {
+        if (axisUi.positionLcd)
+            axisUi.positionLcd->repaint();
+        if (axisUi.statusLabel)
+            axisUi.statusLabel->repaint();
+    }
+    if (ui.label_positionValue)
+        ui.label_positionValue->repaint();
+}
+
+std::function<void()> thorlabsKinesisPlugin::createBlockingMovePositionCallback()
+{
+    if (QThread::currentThread() != thread())
+        return {};
+
+    auto nextRefresh = std::make_shared<std::chrono::steady_clock::time_point>();
+    return [this, nextRefresh]() {
+        const auto now = std::chrono::steady_clock::now();
+        if (now < *nextRefresh)
+            return;
+
+        *nextRefresh = now + std::chrono::milliseconds(kBlockingMoveRefreshIntervalMs);
+        refreshBlockingMovePositionDisplays();
+    };
 }
 
 void thorlabsKinesisPlugin::rebuildAxisFrames()
@@ -2232,6 +2288,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
         emptyLabel->setMinimumHeight(80);
         ui.axisFramesLayout->addWidget(emptyLabel);
         updateAxisFrameAreaHeight();
+        QTimer::singleShot(0, this, [this]() { updateAxisFrameAreaHeight(); });
         return;
     }
 
@@ -2374,6 +2431,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
                         ? QStringLiteral(" <<<")
                         : QStringLiteral(" >>>")));
                     updateAxisFrameAreaHeight();
+                    QTimer::singleShot(0, this, [this]() { updateAxisFrameAreaHeight(); });
                 });
             connect(serialPanicButton, &QPushButton::clicked, this,
                 [this, serialKey]() {
@@ -2458,6 +2516,7 @@ void thorlabsKinesisPlugin::rebuildAxisFrames()
 
     setMotionUiBusy(m_motionTaskActive.load());
     updateAxisFrameAreaHeight();
+    QTimer::singleShot(0, this, [this]() { updateAxisFrameAreaHeight(); });
 }
 
 void thorlabsKinesisPlugin::refreshAxisUi()
@@ -2720,6 +2779,72 @@ bool thorlabsKinesisPlugin::moveTo(double pos, int id)
     return moveToAxisIndex(pos, axisIndexFromPublicId(id));
 }
 
+bool thorlabsKinesisPlugin::setAxisMoveVelocityMmS(int id, double velocityMmS)
+{
+    const int axisIndex = axisIndexFromPublicId(id);
+    if (!isInitialized()
+        || !std::isfinite(velocityMmS)
+        || velocityMmS <= 0.0
+        || axisIndex < 0
+        || axisIndex >= m_axes.size()
+        || m_motionTaskActive.load()
+        || !m_axisMotionThreads.isEmpty()
+        || m_gamepadActiveJogs.contains(axisIndex))
+    {
+        return false;
+    }
+
+    bool moving = false;
+    bool homed = false;
+    if (!readAxisMotionState(axisIndex, moving, homed) || moving || !homed)
+        return false;
+
+    const AxisEntry& axis = m_axes.at(axisIndex);
+    short err = 0;
+    bool ok = false;
+    if (axis.isM30xy)
+    {
+        BDCStage* stage = m30xyForBase(axis.baseSerial);
+        ok = stage
+            && stage->isOpen()
+            && stage->setMaxVelocityMmS(
+                static_cast<unsigned>(axis.channel), velocityMmS, &err);
+    }
+    else
+    {
+        KVSStage* stage = kvsForSerial(axis.baseSerial);
+        ok = stage && stage->isOpen()
+            && stage->setMaxVelocityMmS(velocityMmS, &err);
+    }
+
+    qDebug() << "Axis move velocity updated"
+        << "axis=" << axis.globalAxisId
+        << "velocityMmS=" << velocityMmS
+        << "err=" << err
+        << "updated=" << ok;
+    return ok;
+}
+
+QVariantMap thorlabsKinesisPlugin::axisTravelRange(int id)
+{
+    QVariantMap range;
+    range.insert(QStringLiteral("valid"), false);
+
+    const int axisIndex = axisIndexFromPublicId(id);
+    if (!isInitialized() || axisIndex < 0 || axisIndex >= m_axes.size())
+        return range;
+
+    double minimumUm = 0.0;
+    double maximumUm = 0.0;
+    if (!axisTravelLimitsUm(m_axes.at(axisIndex), minimumUm, maximumUm))
+        return range;
+
+    range.insert(QStringLiteral("valid"), true);
+    range.insert(QStringLiteral("minimum"), minimumUm);
+    range.insert(QStringLiteral("maximum"), maximumUm);
+    return range;
+}
+
 bool thorlabsKinesisPlugin::moveToAxisIndex(double pos, int axisIndex, bool waitForOtherAxes)
 {
     const QString methodName = "moveTo(pos_um,id)";
@@ -2741,6 +2866,7 @@ bool thorlabsKinesisPlugin::moveToAxisIndex(double pos, int axisIndex, bool wait
         << "pos_um" << pos;
 
     short err = 0;
+    const std::function<void()> progressCallback = createBlockingMovePositionCallback();
 
     if (!disableAllTriggers())
         return false;
@@ -2750,11 +2876,17 @@ bool thorlabsKinesisPlugin::moveToAxisIndex(double pos, int axisIndex, bool wait
     if (ax.isM30xy)
     {
         BDCStage* stage = m30xyForBase(ax.baseSerial);
-        return stage->isOpen() && stage->moveToUm(pos, ax.channel, &err);
+        const bool moved = stage->isOpen()
+            && stage->moveToUm(pos, ax.channel, &err, progressCallback);
+        refreshBlockingMovePositionDisplays();
+        return moved;
     }
 
     KVSStage* stage = kvsForSerial(ax.baseSerial);
-    return stage->isOpen() && stage->moveToUm(pos, &err);
+    const bool moved = stage->isOpen()
+        && stage->moveToUm(pos, &err, progressCallback);
+    refreshBlockingMovePositionDisplays();
+    return moved;
 }
 
 bool thorlabsKinesisPlugin::moveTo(double* pos, const char* axes)
@@ -3157,6 +3289,8 @@ bool thorlabsKinesisPlugin::moveAxesCoordinated(const double* values, const char
         }
     }
 
+    const std::function<void()> progressCallback = createBlockingMovePositionCallback();
+
     // Phase 2: all axes are already moving. Waiting sequentially here does not
     // serialize their motion; it only collects completion and error results.
     for (PendingMove& move : pending)
@@ -3169,15 +3303,19 @@ bool thorlabsKinesisPlugin::moveAxesCoordinated(const double* values, const char
 
         short err = 0;
         const bool reached = move.bdc
-            ? move.bdc->waitForPosition(move.targetDeviceUnits, move.channel, 120000, &err)
-            : move.kvs->waitForPosition(move.targetDeviceUnits, 120000, &err);
+            ? move.bdc->waitForPosition(
+                move.targetDeviceUnits, move.channel, 120000, &err, progressCallback)
+            : move.kvs->waitForPosition(
+                move.targetDeviceUnits, 120000, &err, progressCallback);
         if (!reached)
         {
+            refreshBlockingMovePositionDisplays();
             stop();
             return false;
         }
     }
 
+    refreshBlockingMovePositionDisplays();
     return true;
 }
 
@@ -3237,6 +3375,7 @@ bool thorlabsKinesisPlugin::moveStepsAxisIndex(double steps, int axisIndex, bool
         << "delta_um" << steps;
 
     short err = 0;
+    const std::function<void()> progressCallback = createBlockingMovePositionCallback();
 
     if (!disableAllTriggers())
         return false;
@@ -3246,11 +3385,17 @@ bool thorlabsKinesisPlugin::moveStepsAxisIndex(double steps, int axisIndex, bool
     if (ax.isM30xy)
     {
         BDCStage* stage = m30xyForBase(ax.baseSerial);
-        return stage->isOpen() && stage->moveRelUm(steps, ax.channel, &err);
+        const bool moved = stage->isOpen()
+            && stage->moveRelUm(steps, ax.channel, &err, progressCallback);
+        refreshBlockingMovePositionDisplays();
+        return moved;
     }
 
     KVSStage* stage = kvsForSerial(ax.baseSerial);
-    return stage->isOpen() && stage->moveRelUm(steps, &err);
+    const bool moved = stage->isOpen()
+        && stage->moveRelUm(steps, &err, progressCallback);
+    refreshBlockingMovePositionDisplays();
+    return moved;
 }
 
 // Helper for moving several relative axes at once, e.g. "xyz"

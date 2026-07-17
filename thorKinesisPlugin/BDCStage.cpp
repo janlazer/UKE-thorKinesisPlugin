@@ -902,12 +902,13 @@ bool BDCStage::beginMoveTo(int32_t pos, unsigned channel, short* errOut)
     return true;
 }
 
-bool BDCStage::waitForPosition(int32_t targetPos, unsigned channel, int timeoutMs, short* errOut)
+bool BDCStage::waitForPosition(int32_t targetPos, unsigned channel, int timeoutMs,
+    short* errOut, const std::function<void()>& progressCallback)
 {
     if (!validateReady(channel, errOut))
         return false;
 
-    if (!waitUntilIdle(channel, targetPos, timeoutMs, errOut))
+    if (!waitUntilIdle(channel, targetPos, timeoutMs, errOut, progressCallback))
     {
         // A failed blocking move must never continue in the background or
         // leave a position trigger armed.
@@ -921,17 +922,19 @@ bool BDCStage::waitForPosition(int32_t targetPos, unsigned channel, int timeoutM
     return true;
 }
 
-bool BDCStage::moveTo(int32_t pos, unsigned channel, short* errOut)
+bool BDCStage::moveTo(int32_t pos, unsigned channel, short* errOut,
+    const std::function<void()>& progressCallback)
 {
     qDebug() << "BDCStage::moveTo serial=" << m_serialCStr << "ch=" << channel << "pos(device)=" << pos;
 
     if (!beginMoveTo(pos, channel, errOut))
         return false;
 
-    return waitForPosition(pos, channel, 120000, errOut);
+    return waitForPosition(pos, channel, 120000, errOut, progressCallback);
 }
 
-bool BDCStage::moveRel(int32_t delta, unsigned channel, short* errOut)
+bool BDCStage::moveRel(int32_t delta, unsigned channel, short* errOut,
+    const std::function<void()>& progressCallback)
 {
     short err = 0;
     const int32_t cur = getPosition(channel, &err);
@@ -949,10 +952,11 @@ bool BDCStage::moveRel(int32_t delta, unsigned channel, short* errOut)
         return false;
     }
 
-    return moveTo(static_cast<int32_t>(target), channel, errOut);
+    return moveTo(static_cast<int32_t>(target), channel, errOut, progressCallback);
 }
 
-bool BDCStage::moveToUm(double posUm, unsigned channel, short* errOut)
+bool BDCStage::moveToUm(double posUm, unsigned channel, short* errOut,
+    const std::function<void()>& progressCallback)
 {
     if (!validateReady(channel, errOut))
         return false;
@@ -994,10 +998,11 @@ bool BDCStage::moveToUm(double posUm, unsigned channel, short* errOut)
         << "posUm=" << posUm
         << "targetDev=" << targetDev;
 
-    return moveTo(targetDev, channel, errOut);
+    return moveTo(targetDev, channel, errOut, progressCallback);
 }
 
-bool BDCStage::moveRelUm(double deltaUm, unsigned channel, short* errOut)
+bool BDCStage::moveRelUm(double deltaUm, unsigned channel, short* errOut,
+    const std::function<void()>& progressCallback)
 {
     if (!std::isfinite(deltaUm) || std::abs(deltaUm) > kBdcM30MaxSingleRelativeMoveUm)
     {
@@ -1049,7 +1054,7 @@ bool BDCStage::moveRelUm(double deltaUm, unsigned channel, short* errOut)
         << "deltaUm=" << deltaUm
         << "deltaDev=" << deltaDev;
 
-    return moveRel(deltaDev, channel, errOut);
+    return moveRel(deltaDev, channel, errOut, progressCallback);
 }
 
 bool BDCStage::stopImmediate(unsigned channel, short* errOut)
@@ -1654,7 +1659,8 @@ static bool isHomedFromStatus(uint32_t statusBits)
     return (statusBits & HOMED_MASK) != 0;
 }
 
-bool BDCStage::waitUntilIdle(unsigned channel, int32_t targetPos, int timeoutMs, short* errOut)
+bool BDCStage::waitUntilIdle(unsigned channel, int32_t targetPos, int timeoutMs,
+    short* errOut, const std::function<void()>& progressCallback)
 {
     if (!validateReady(channel, errOut))
         return false;
@@ -1668,6 +1674,8 @@ bool BDCStage::waitUntilIdle(unsigned channel, int32_t targetPos, int timeoutMs,
     {
         uint32_t bits = (uint32_t)BDC_GetStatusBits(m_serialCStr, (short)channel);
         int32_t pos = getPosition(channel, errOut);
+        if (progressCallback)
+            progressCallback();
 
         const bool moving = isMovingFromStatus(bits);
         if (moving) seenMoving = true;

@@ -1,7 +1,8 @@
 #pragma once
 
-#include <string>
 #include <cstdint>
+#include <functional>
+#include <string>
 
 enum class BDCTriggerMode : int
 {
@@ -54,9 +55,12 @@ public:
     bool homeIfNeeded(unsigned channel, short* errOut = nullptr);
 
     bool beginMoveTo(int32_t pos, unsigned channel, short* errOut = nullptr);
-    bool waitForPosition(int32_t targetPos, unsigned channel, int timeoutMs = 120000, short* errOut = nullptr);
-    bool moveTo(int32_t pos, unsigned channel, short* errOut = nullptr);
-    bool moveRel(int32_t delta, unsigned channel, short* errOut = nullptr);
+    bool waitForPosition(int32_t targetPos, unsigned channel, int timeoutMs = 120000,
+        short* errOut = nullptr, const std::function<void()>& progressCallback = {});
+    bool moveTo(int32_t pos, unsigned channel, short* errOut = nullptr,
+        const std::function<void()>& progressCallback = {});
+    bool moveRel(int32_t delta, unsigned channel, short* errOut = nullptr,
+        const std::function<void()>& progressCallback = {});
     bool stopImmediate(unsigned channel, short* errOut = nullptr);
 
     int32_t getPosition(unsigned channel, short* errOut = nullptr) const;
@@ -64,8 +68,10 @@ public:
     bool isHomed(unsigned channel, short* errOut = nullptr) const;
 
     // Motion - public standard unit: micrometers (µm)
-    bool moveToUm(double posUm, unsigned channel, short* errOut = nullptr);
-    bool moveRelUm(double deltaUm, unsigned channel, short* errOut = nullptr);
+    bool moveToUm(double posUm, unsigned channel, short* errOut = nullptr,
+        const std::function<void()>& progressCallback = {});
+    bool moveRelUm(double deltaUm, unsigned channel, short* errOut = nullptr,
+        const std::function<void()>& progressCallback = {});
     double getPositionUm(unsigned channel, short* errOut = nullptr) const;
 
     // Unit conversion helpers
@@ -107,7 +113,8 @@ private:
     bool validateChannel(unsigned channel, short* errOut = nullptr) const;
     bool validateReady(unsigned channel, short* errOut = nullptr) const;
 
-    bool waitUntilIdle(unsigned channel, int32_t targetPos, int timeoutMs, short* errOut = nullptr);
+    bool waitUntilIdle(unsigned channel, int32_t targetPos, int timeoutMs,
+        short* errOut = nullptr, const std::function<void()>& progressCallback = {});
     bool waitUntilHomed(unsigned channel, int timeoutMs, short* errOut = nullptr);
 
 private:

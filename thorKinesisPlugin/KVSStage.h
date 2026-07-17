@@ -1,6 +1,7 @@
 #pragma once
-#include <string>
 #include <cstdint>
+#include <functional>
+#include <string>
 
 enum class KVSTriggerMode : int
 {
@@ -48,9 +49,12 @@ public:
     bool homeIfNeeded(short* errOut = nullptr);
 
     bool beginMoveTo(int32_t pos, short* errOut = nullptr);
-    bool waitForPosition(int32_t targetPos, int timeoutMs = 120000, short* errOut = nullptr);
-    bool moveTo(int32_t pos, short* errOut = nullptr);
-    bool moveRel(int32_t delta, short* errOut = nullptr);
+    bool waitForPosition(int32_t targetPos, int timeoutMs = 120000,
+        short* errOut = nullptr, const std::function<void()>& progressCallback = {});
+    bool moveTo(int32_t pos, short* errOut = nullptr,
+        const std::function<void()>& progressCallback = {});
+    bool moveRel(int32_t delta, short* errOut = nullptr,
+        const std::function<void()>& progressCallback = {});
     bool stopImmediate(short* errOut = nullptr);
     bool stopProfiled(short* errOut = nullptr);
 
@@ -59,8 +63,10 @@ public:
     bool isHomed(short* errOut = nullptr) const;
 
     // Motion - public standard unit: micrometers (µm)
-    bool moveToUm(double posUm, short* errOut = nullptr);
-    bool moveRelUm(double deltaUm, short* errOut = nullptr);
+    bool moveToUm(double posUm, short* errOut = nullptr,
+        const std::function<void()>& progressCallback = {});
+    bool moveRelUm(double deltaUm, short* errOut = nullptr,
+        const std::function<void()>& progressCallback = {});
     double getPositionUm(short* errOut = nullptr) const;
 
     // Unit conversion helpers
@@ -96,7 +102,8 @@ private:
     bool enable(short* errOut = nullptr);
     bool enableIfNeeded(unsigned channel, short* errOut);
     bool validateOpen(short* errOut = nullptr) const;
-    bool waitUntilIdle(int32_t targetPos, int timeoutMs, short* errOut = nullptr);
+    bool waitUntilIdle(int32_t targetPos, int timeoutMs, short* errOut = nullptr,
+        const std::function<void()>& progressCallback = {});
     bool waitUntilHomed(int timeoutMs, short* errOut = nullptr);
 
 private:

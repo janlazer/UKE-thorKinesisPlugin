@@ -787,12 +787,13 @@ bool KVSStage::beginMoveTo(int32_t pos, short* errOut)
     return true;
 }
 
-bool KVSStage::waitForPosition(int32_t targetPos, int timeoutMs, short* errOut)
+bool KVSStage::waitForPosition(int32_t targetPos, int timeoutMs, short* errOut,
+    const std::function<void()>& progressCallback)
 {
     if (!validateOpen(errOut))
         return false;
 
-    if (!waitUntilIdle(targetPos, timeoutMs, errOut))
+    if (!waitUntilIdle(targetPos, timeoutMs, errOut, progressCallback))
     {
         KVS_StopImmediate(m_serialCStr);
         short ignored = 0;
@@ -804,17 +805,19 @@ bool KVSStage::waitForPosition(int32_t targetPos, int timeoutMs, short* errOut)
     return true;
 }
 
-bool KVSStage::moveTo(int32_t pos, short* errOut)
+bool KVSStage::moveTo(int32_t pos, short* errOut,
+    const std::function<void()>& progressCallback)
 {
     qDebug() << "KVSStage::moveTo serial=" << m_serialCStr << "pos(device)=" << pos;
 
     if (!beginMoveTo(pos, errOut))
         return false;
 
-    return waitForPosition(pos, 120000, errOut);
+    return waitForPosition(pos, 120000, errOut, progressCallback);
 }
 
-bool KVSStage::moveRel(int32_t delta, short* errOut)
+bool KVSStage::moveRel(int32_t delta, short* errOut,
+    const std::function<void()>& progressCallback)
 {
     short err = 0;
     const int32_t cur = getPosition(&err);
@@ -832,10 +835,11 @@ bool KVSStage::moveRel(int32_t delta, short* errOut)
         return false;
     }
 
-    return moveTo(static_cast<int32_t>(target), errOut);
+    return moveTo(static_cast<int32_t>(target), errOut, progressCallback);
 }
 
-bool KVSStage::moveToUm(double posUm, short* errOut)
+bool KVSStage::moveToUm(double posUm, short* errOut,
+    const std::function<void()>& progressCallback)
 {
     if (!std::isfinite(posUm)
         || posUm < kKvs30MinAbsolutePositionUm
@@ -861,10 +865,11 @@ bool KVSStage::moveToUm(double posUm, short* errOut)
         << "posUm=" << posUm
         << "targetDev=" << targetDev;
 
-    return moveTo(targetDev, errOut);
+    return moveTo(targetDev, errOut, progressCallback);
 }
 
-bool KVSStage::moveRelUm(double deltaUm, short* errOut)
+bool KVSStage::moveRelUm(double deltaUm, short* errOut,
+    const std::function<void()>& progressCallback)
 {
     if (!std::isfinite(deltaUm) || std::abs(deltaUm) > kKvs30MaxSingleRelativeMoveUm)
     {
@@ -912,7 +917,7 @@ bool KVSStage::moveRelUm(double deltaUm, short* errOut)
         << "deltaUm=" << deltaUm
         << "deltaDev=" << deltaDev;
 
-    return moveRel(deltaDev, errOut);
+    return moveRel(deltaDev, errOut, progressCallback);
 }
 
 bool KVSStage::stopImmediate(short* errOut)
@@ -1429,7 +1434,8 @@ static bool isHomedFromStatus(uint32_t statusBits)
     return (statusBits & HOMED_MASK) != 0;
 }
 
-bool KVSStage::waitUntilIdle(int32_t targetPos, int timeoutMs, short* errOut)
+bool KVSStage::waitUntilIdle(int32_t targetPos, int timeoutMs, short* errOut,
+    const std::function<void()>& progressCallback)
 {
     if (!validateOpen(errOut))
         return false;
@@ -1443,6 +1449,8 @@ bool KVSStage::waitUntilIdle(int32_t targetPos, int timeoutMs, short* errOut)
     {
         uint32_t bits = (uint32_t)KVS_GetStatusBits(m_serialCStr);
         int32_t pos = getPosition(errOut);
+        if (progressCallback)
+            progressCallback();
 
         const bool moving = isMovingFromStatus(bits);
         if (moving) seenMoving = true;

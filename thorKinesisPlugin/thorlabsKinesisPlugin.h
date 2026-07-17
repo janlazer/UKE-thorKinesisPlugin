@@ -28,6 +28,7 @@
 #include <QDebug>
 #include <QThread>
 #include <QStringList>
+#include <QVariantMap>
 
 #include <memory>
 #include <unordered_map>
@@ -118,6 +119,8 @@ public:
     Q_INVOKABLE bool choosePositionConfig(const QString& name);
     Q_INVOKABLE bool goToPositionConfig();
     Q_INVOKABLE bool goToPositionConfig(const QString& name);
+    Q_INVOKABLE bool setAxisMoveVelocityMmS(int id, double velocityMmS);
+    Q_INVOKABLE QVariantMap axisTravelRange(int id);
 
     // legacy methods kept (stubs)
     void setHWSerialNr(QString* serialNr);
@@ -215,6 +218,8 @@ private:
     void refreshAxisPositionUi(int id);
     void refreshAxisStatusUi(int id);
     void refreshAllAxisPositionsUi();
+    void refreshBlockingMovePositionDisplays();
+    std::function<void()> createBlockingMovePositionCallback();
     void syncLegacyMotionInputsFromAxisUi(int id);
     void syncLegacyTriggerInputsFromAxisUi(int id);
     void updateTriggerFrequencyUi(int id);
