@@ -878,11 +878,17 @@ void thorlabsKinesisPlugin::ensureGamepadDefaults()
 
     auto ensureBinding = [&](int direction, int axisId, int sign) {
         GamepadDirectionBinding& binding = m_gamepadConfig.directionBindings[direction];
-        if (binding.globalAxisId <= 0 || axisIndexFromGlobalId(binding.globalAxisId) < 0)
+        const bool invalidAxis = binding.globalAxisId <= 0
+            || axisIndexFromGlobalId(binding.globalAxisId) < 0;
+        if (invalidAxis)
+        {
             binding.globalAxisId = axisId;
-        binding.sign = binding.sign < 0 ? -1 : 1;
-        if (axisId > 0 && binding.globalAxisId == axisId)
             binding.sign = sign;
+        }
+        else
+        {
+            binding.sign = binding.sign < 0 ? -1 : 1;
+        }
     };
 
     ensureBinding(kGamepadDirectionUp, xAxisId, +1);
